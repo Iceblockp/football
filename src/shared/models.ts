@@ -6,6 +6,7 @@ export interface Band { outcome: Outcome; rate: number }
 export interface Rule {
   id: string; code: string; market: Market; line: number;
   below: Band; equal: Band; above: Band;
+  status?: 'active' | 'closed'; effectiveAt?: string; closedAt?: string;
 }
 export interface Match {
   id: string; date: string; time: string; home: string; away: string;
@@ -14,6 +15,8 @@ export interface Match {
 export interface Bet {
   id: string; date: string; matchId: string; ruleId: string; selection: Selection;
   note: string; amount: number;
+  /** Immutable rule used at acceptance time, so later odds changes cannot rewrite history. */
+  ruleSnapshot?: Rule; placedAt?: string; lateEntry?: boolean; lateReason?: string;
 }
 export interface Store { matches: Match[]; bets: Bet[]; settings: { winDeduction: number; commission: number } }
 export interface Settlement {
