@@ -9,8 +9,8 @@
     "build:electron": "tsc -p tsconfig.electron.json",
     "typecheck": "tsc --noEmit -p tsconfig.json && tsc --noEmit -p tsconfig.electron.json",
     "start": "npm run build && electron .",
-    "package": "npm run build && electron-builder",
-    "package:win": "npm run build && electron-builder --win nsis"
+    "package": "npm run build && electron-builder --publish never",
+    "package:win": "npm run build && electron-builder --win nsis --publish never"
   },
   "dependencies": { "react": "^19.2.3", "react-dom": "^19.2.3" },
   "devDependencies": {
