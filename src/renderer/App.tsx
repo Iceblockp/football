@@ -38,6 +38,13 @@ export function App() {
   const [matchForm, setMatchForm] = useState({ time: '19:00', home: '', away: '', rules: [defaultRule('body'), defaultRule('total')] as Rule[] }); const [editingMatchId, setEditingMatchId] = useState<string | null>(null);
   const [betForm, setBetForm] = useState({ matchId: '', ruleId: '', selection: 'home' as Selection, note: '', amount: '' }); const [editingBetId, setEditingBetId] = useState<string | null>(null);
   useEffect(() => { void window.footballPos.data.load().then(setStore); }, []);
+  useEffect(() => {
+    const rules = (store?.matches ?? []).flatMap(match => match.rules);
+    document.querySelectorAll('option').forEach(option => {
+      const rule = rules.find(item => item.id === (option as HTMLOptionElement).value);
+      if (rule) option.textContent = `${rule.market === 'body' ? 'BD' : 'O/U'} — ${rule.code} [${rule.status === 'closed' ? 'ပိတ် · Late entry only' : 'ဖွင့်'}]`;
+    });
+  }, [store, betForm.matchId]);
   const save = async (next: Store) => { setStore(next); await window.footballPos.data.save(next); };
   const matches = store?.matches ?? []; const bets = store?.bets ?? []; const dayMatches = matches.filter(x => x.date === activeDate); const dayBets = bets.filter(x => x.date === activeDate);
   const selectedMatch = dayMatches.find(x => x.id === betForm.matchId); const selectedRule = selectedMatch?.rules.find(x => x.id === betForm.ruleId);
