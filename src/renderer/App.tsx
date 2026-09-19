@@ -1,14 +1,26 @@
 import { useEffect, useMemo, useState } from 'react';
 import type { Band, Bet, Market, Match, Outcome, Rule, Selection, Settlement, Store } from '../shared/models';
+import { BODY_ODDS_PRESETS, TOTAL_ODDS_PRESETS, formatBandSummary, parseMyanmarOdds } from '../shared/odds';
 
 const uid = () => crypto.randomUUID();
 const today = () => new Date().toISOString().slice(0, 10);
 const money = (n: number) => new Intl.NumberFormat('en-US', { maximumFractionDigits: 0 }).format(Math.abs(n));
 const action = (outcome: Outcome, rate: number): Band => ({ outcome, rate: outcome === 'refund' ? 0 : Number(rate) || 0 });
-const defaultRule = (market: Market): Rule => ({
-  id: uid(), code: market === 'body' ? '1+80' : '2-60', market, line: market === 'body' ? 1 : 2,
-  below: action('loss', 100), equal: action(market === 'body' ? 'win' : 'loss', market === 'body' ? 80 : 60), above: action('win', 100), status: 'active', effectiveAt: new Date().toISOString(),
-});
+const defaultRule = (market: Market): Rule => {
+  const code = market === 'body' ? '1+80' : '2-60';
+  const parsed = parseMyanmarOdds(code);
+  return {
+    id: uid(),
+    code,
+    market,
+    line: parsed ? parsed.line : (market === 'body' ? 1 : 2),
+    below: parsed ? parsed.below : action('loss', 100),
+    equal: parsed ? parsed.equal : action(market === 'body' ? 'win' : 'loss', market === 'body' ? 80 : 60),
+    above: parsed ? parsed.above : action('win', 100),
+    status: 'active',
+    effectiveAt: new Date().toISOString(),
+  };
+};
 const labels: Record<Outcome, string> = { win: 'အမြတ်', loss: 'အရှုံး', refund: 'ပြန်အမ်း' };
 function settle(bet: Bet, match: Match, rule: Rule): Settlement {
   if (match.postponed) return { bet, match, rule, band: action('refund', 0), signed: 0, label: 'P:P / ပြန်အမ်း' };
@@ -31,12 +43,113 @@ function BandFields({ label, value, onChange }: { label: string; value: Band; on
   return <div className="band"><span>{label}</span><select value={value.outcome} onChange={e => onChange(action(e.target.value as Outcome, value.rate))}>{(['win', 'loss', 'refund'] as Outcome[]).map(x => <option value={x} key={x}>{labels[x]}</option>)}</select>{value.outcome !== 'refund' && <input aria-label={`${label} rate`} type="number" min="0" max="100" value={value.rate} onChange={e => onChange(action(value.outcome, Number(e.target.value)))} />}</div>;
 }
 function RuleEditor({ rule, onChange }: { rule: Rule; onChange: (r: Rule) => void }) {
-  return <div className="rule-editor"><div className="rule-top"><label>Market<select value={rule.market} onChange={e => onChange({ ...defaultRule(e.target.value as Market), id: rule.id })}><option value="body">Body</option><option value="total">O/U</option></select></label><label>ပြမည့် Rule code<input value={rule.code} onChange={e => onChange({ ...rule, code: e.target.value })} placeholder="ဥပမာ 1+80" /></label><label>Line<input type="number" step="0.25" value={rule.line} onChange={e => onChange({ ...rule, line: Number(e.target.value) })} /></label></div><div className="bands"><BandFields label="Line အောက်" value={rule.below} onChange={below => onChange({ ...rule, below })}/><BandFields label="Line တိတိ" value={rule.equal} onChange={equal => onChange({ ...rule, equal })}/><BandFields label="Line အထက်" value={rule.above} onChange={above => onChange({ ...rule, above })}/></div></div>;
+  const [showCustom, setShowCustom] = useState(false);
+  const presets = rule.market === 'body' ? BODY_ODDS_PRESETS : TOTAL_ODDS_PRESETS;
+
+  const handleMarketChange = (market: Market) => {
+    onChange({ ...defaultRule(market), id: rule.id });
+  };
+
+  const handlePresetSelect = (code: string) => {
+    if (!code) return;
+    const parsed = parseMyanmarOdds(code);
+    if (parsed) {
+      onChange({
+        ...rule,
+        code,
+        line: parsed.line,
+        below: parsed.below,
+        equal: parsed.equal,
+        above: parsed.above,
+      });
+    }
+  };
+
+  const handleCodeChange = (newCode: string) => {
+    const parsed = parseMyanmarOdds(newCode);
+    if (parsed) {
+      onChange({
+        ...rule,
+        code: newCode,
+        line: parsed.line,
+        below: parsed.below,
+        equal: parsed.equal,
+        above: parsed.above,
+      });
+    } else {
+      onChange({ ...rule, code: newCode });
+    }
+  };
+
+  return (
+    <div className="rule-editor">
+      <div className="rule-top">
+        <label>
+          Market
+          <select value={rule.market} onChange={e => handleMarketChange(e.target.value as Market)}>
+            <option value="body">Body</option>
+            <option value="total">O/U</option>
+          </select>
+        </label>
+        <label>
+          Quick Preset
+          <select value={presets.some(p => p.code === rule.code) ? rule.code : ''} onChange={e => handlePresetSelect(e.target.value)}>
+            <option value="">-- Preset ရွေးပါ --</option>
+            {presets.map(p => (
+              <option value={p.code} key={p.code}>
+                {p.label}
+              </option>
+            ))}
+          </select>
+        </label>
+        <label>
+          Rule Code
+          <input
+            value={rule.code}
+            onChange={e => handleCodeChange(e.target.value)}
+            placeholder="ဥပမာ 1+80, 2-60, 0.5"
+          />
+        </label>
+        <label>
+          Line
+          <input
+            type="number"
+            step="0.25"
+            value={rule.line}
+            onChange={e => onChange({ ...rule, line: Number(e.target.value) })}
+          />
+        </label>
+      </div>
+
+      <div className="rule-summary-badge">
+        <span className="badge-pill">Line: <b>{rule.line}</b></span>
+        <span className="badge-pill">အောက်: <b>{formatBandSummary(rule.below)}</b></span>
+        <span className="badge-pill">တိတိ: <b>{formatBandSummary(rule.equal)}</b></span>
+        <span className="badge-pill">အထက်: <b>{formatBandSummary(rule.above)}</b></span>
+      </div>
+
+      <button
+        type="button"
+        className="link rule-customize-btn"
+        onClick={() => setShowCustom(prev => !prev)}
+      >
+        {showCustom ? '▲ အချိုးများကို ပြန်ဝှက်ရန်' : '⚙️ အချိုးများကို အသေးစိတ် စိတ်ကြိုက်ပြင်ရန် (Custom Bands)'}
+      </button>
+
+      {showCustom && (
+        <div className="bands">
+          <BandFields label="Line အောက်" value={rule.below} onChange={below => onChange({ ...rule, below })} />
+          <BandFields label="Line တိတိ" value={rule.equal} onChange={equal => onChange({ ...rule, equal })} />
+          <BandFields label="Line အထက်" value={rule.above} onChange={above => onChange({ ...rule, above })} />
+        </div>
+      )}
+    </div>
+  );
 }
 export function App() {
   const [store, setStore] = useState<Store | null>(null); const [page, setPage] = useState<'matches' | 'ledger' | 'report' | 'settings'>('matches'); const [notice, setNotice] = useState(''); const [activeDate, setActiveDate] = useState(today());
   const [matchForm, setMatchForm] = useState({ time: '19:00', home: '', away: '', rules: [defaultRule('body'), defaultRule('total')] as Rule[] }); const [editingMatchId, setEditingMatchId] = useState<string | null>(null);
-  const [betForm, setBetForm] = useState({ matchId: '', ruleId: '', selection: 'home' as Selection, note: '', amount: '' }); const [editingBetId, setEditingBetId] = useState<string | null>(null);
+  const [betForm, setBetForm] = useState({ matchId: '', ruleId: '', selection: 'home' as Selection, note: '', amount: '', lateReceivedAt: '', lateReason: '' }); const [editingBetId, setEditingBetId] = useState<string | null>(null); const [matchSearch, setMatchSearch] = useState('');
   useEffect(() => { void window.footballPos.data.load().then(setStore); }, []);
   useEffect(() => {
     const rules = (store?.matches ?? []).flatMap(match => match.rules);
@@ -47,6 +160,11 @@ export function App() {
   }, [store, betForm.matchId]);
   const save = async (next: Store) => { setStore(next); await window.footballPos.data.save(next); };
   const matches = store?.matches ?? []; const bets = store?.bets ?? []; const dayMatches = matches.filter(x => x.date === activeDate); const dayBets = bets.filter(x => x.date === activeDate);
+  const filteredDayMatches = useMemo(() => {
+    if (!matchSearch.trim()) return dayMatches;
+    const q = matchSearch.toLowerCase();
+    return dayMatches.filter(m => m.home.toLowerCase().includes(q) || m.away.toLowerCase().includes(q));
+  }, [dayMatches, matchSearch]);
   useEffect(() => { const match = dayMatches.find(item => item.id === betForm.matchId); const active = match?.rules.find(rule => rule.status !== 'closed'); if (match && active) setBetForm(current => ({ ...current, ruleId: active.id, selection: active.market === 'total' ? 'up' : 'home' })); }, [betForm.matchId]);
   const selectedMatch = dayMatches.find(x => x.id === betForm.matchId); const selectedRule = selectedMatch?.rules.find(x => x.id === betForm.ruleId);
   const settlements = useMemo(() => store ? bets.map(b => { const m = matches.find(x => x.id === b.matchId); const r = b.ruleSnapshot ?? m?.rules.find(x => x.id === b.ruleId); return m && r ? settle(b, m, r) : null; }).filter(Boolean) as Settlement[] : [], [store, bets, matches]);
@@ -55,23 +173,362 @@ export function App() {
   const resetMatchForm = () => { setEditingMatchId(null); setMatchForm({ time: '19:00', home: '', away: '', rules: [defaultRule('body'), defaultRule('total')] }); };
   const addMatch = async (e: React.FormEvent) => { e.preventDefault(); if (!store || !matchForm.home.trim() || !matchForm.away.trim()) return flash('အသင်းနှစ်သင်းလုံး ထည့်ပါ။'); const previous = editingMatchId ? matches.find(x => x.id === editingMatchId) : undefined; const history = previous?.rules.filter(rule => rule.status === 'closed') ?? []; const updated: Match = { id: previous?.id || uid(), ...matchForm, rules: previous ? [...history, ...matchForm.rules] : matchForm.rules, date: activeDate, home: matchForm.home.trim(), away: matchForm.away.trim(), homeScore: previous?.homeScore ?? null, awayScore: previous?.awayScore ?? null, postponed: previous?.postponed ?? false }; await save({ ...store, matches: previous ? matches.map(x => x.id === previous.id ? updated : x) : [...matches, updated] }); resetMatchForm(); flash(previous ? 'Active rule များကို ပြင်ပြီးပါပြီ။ ပိတ်ထားသော rule history မပြောင်းပါ။' : 'Match နှင့် flexible rules ကို သိမ်းပြီးပါပြီ။'); };
   const saveResult = async (m: Match, homeScore: string, awayScore: string, postponed: boolean) => { if (!store) return; const updated = { ...m, homeScore: postponed ? null : Number(homeScore), awayScore: postponed ? null : Number(awayScore), postponed }; await save({ ...store, matches: matches.map(x => x.id === m.id ? updated : x) }); flash(postponed ? 'P:P / Refund အဖြစ်သိမ်းပြီးပါပြီ။' : 'Result သိမ်းပြီး settlement ကို update လုပ်ပြီးပါပြီ။'); };
-  const resetBetForm = () => { setEditingBetId(null); setBetForm({ matchId: '', ruleId: '', selection: 'home', note: '', amount: '' }); };
-  const addBet = async (e: React.FormEvent) => { e.preventDefault(); if (!store || !selectedMatch || !selectedRule || Number(betForm.amount) <= 0) return flash('Match, rule နှင့် လောင်းငွေကိုရွေးပါ။'); let lateEntry = false; let lateReason = ''; let placedAt = new Date().toISOString(); if (selectedRule.status === 'closed') { const receivedAt = window.prompt(`ဤ rule သည် ${selectedRule.closedAt ? new Date(selectedRule.closedAt).toLocaleString() : 'ယခင်'} တွင် ပိတ်ထားပြီးဖြစ်သည်။ အရင်လက်ခံထားသောစာရင်းဖြစ်လျှင် Received time (YYYY-MM-DD HH:MM) ထည့်ပါ။`); if (!receivedAt) return; const received = new Date(receivedAt); if (Number.isNaN(received.valueOf()) || (selectedRule.closedAt && received > new Date(selectedRule.closedAt))) return flash('Received time သည် rule ပိတ်ချိန်မတိုင်မီ ဖြစ်ရမည်။'); lateReason = window.prompt('Late entry ဖြစ်ရသည့် အကြောင်းရင်းထည့်ပါ။')?.trim() || ''; if (!lateReason) return flash('Late entry reason လိုအပ်သည်။'); lateEntry = true; placedAt = received.toISOString(); } const isEditing = Boolean(editingBetId); const updated: Bet = { id: editingBetId || uid(), date: selectedMatch.date, matchId: selectedMatch.id, ruleId: selectedRule.id, selection: betForm.selection, note: betForm.note.trim(), amount: Number(betForm.amount), ruleSnapshot: structuredClone(selectedRule), placedAt, lateEntry, lateReason }; await save({ ...store, bets: isEditing ? bets.map(x => x.id === editingBetId ? updated : x) : [...bets, updated] }); resetBetForm(); flash(isEditing ? 'လောင်းမှတ်တမ်း ပြင်ပြီးပါပြီ။' : lateEntry ? 'Late entry ကို rule အဟောင်းဖြင့် သိမ်းပြီးပါပြီ။' : 'လောင်းမှတ်တမ်း သိမ်းပြီးပါပြီ။'); };
+  const resetBetForm = () => { setEditingBetId(null); setBetForm({ matchId: '', ruleId: '', selection: 'home', note: '', amount: '', lateReceivedAt: '', lateReason: '' }); };
+  const addBet = async (e: React.FormEvent) => {
+    e.preventDefault();
+    if (!store || !selectedMatch || !selectedRule || Number(betForm.amount) <= 0) return flash('Match, rule နှင့် လောင်းငွေကိုရွေးပါ။');
+    let lateEntry = false;
+    let lateReason = '';
+    let placedAt = new Date().toISOString();
+    if (selectedRule.status === 'closed') {
+      if (!betForm.lateReceivedAt) return flash('Late entry အတွက် လက်ခံရရှိချိန် (Received time) ထည့်ပါ။');
+      const received = new Date(betForm.lateReceivedAt);
+      if (Number.isNaN(received.valueOf()) || (selectedRule.closedAt && received > new Date(selectedRule.closedAt))) {
+        return flash('Received time သည် rule ပိတ်ချိန်မတိုင်မီ ဖြစ်ရမည်။');
+      }
+      if (!betForm.lateReason.trim()) return flash('Late entry ဖြစ်ရသည့် အကြောင်းရင်း ထည့်ပါ။');
+      lateEntry = true;
+      lateReason = betForm.lateReason.trim();
+      placedAt = received.toISOString();
+    }
+    const isEditing = Boolean(editingBetId);
+    const updated: Bet = {
+      id: editingBetId || uid(),
+      date: selectedMatch.date,
+      matchId: selectedMatch.id,
+      ruleId: selectedRule.id,
+      selection: betForm.selection,
+      note: betForm.note.trim(),
+      amount: Number(betForm.amount),
+      ruleSnapshot: structuredClone(selectedRule),
+      placedAt,
+      lateEntry,
+      lateReason,
+    };
+    await save({ ...store, bets: isEditing ? bets.map(x => x.id === editingBetId ? updated : x) : [...bets, updated] });
+    resetBetForm();
+    flash(isEditing ? 'လောင်းမှတ်တမ်း ပြင်ပြီးပါပြီ။' : lateEntry ? 'Late entry ကို rule အဟောင်းဖြင့် သိမ်းပြီးပါပြီ။' : 'လောင်းမှတ်တမ်း သိမ်းပြီးပါပြီ။');
+  };
   const editMatch = (m: Match) => { setEditingMatchId(m.id); setMatchForm({ time: m.time, home: m.home, away: m.away, rules: m.rules.filter(rule => rule.status !== 'closed') }); window.scrollTo({ top: 0, behavior: 'smooth' }); };
   const commitRuleChange = async (m: Match, drafts: Rule[]) => { const markets = drafts.map(rule => rule.market); const closing = m.rules.filter(rule => rule.status !== 'closed' && markets.includes(rule.market)).map(rule => `${rule.market === 'body' ? 'BD' : 'O/U'} ${rule.code}`).join(', '); if (!window.confirm(`${closing || 'လက်ရှိအကြေး'} ကို ပိတ်ပြီး rule အသစ်ဖွင့်မလား?\n\nအရင်လောင်းမှတ်တမ်းများ မပျက်ပါ။`)) return false; const now = new Date().toISOString(); const activeDrafts = drafts.map(rule => ({ ...rule, status: 'active' as const, effectiveAt: now, closedAt: undefined })); const next: Match = { ...m, rules: [...m.rules.map(rule => rule.status === 'closed' || !markets.includes(rule.market) ? rule : { ...rule, status: 'closed' as const, closedAt: now }), ...activeDrafts] }; await save({ ...store!, matches: matches.map(x => x.id === m.id ? next : x) }); flash('Rule အသစ်ကိုဖွင့်ပြီး အဟောင်း rule ကို history အဖြစ်ပိတ်ထားပါပြီ။'); return true; };
   const deleteMatch = async (m: Match) => { const linked = bets.filter(x => x.matchId === m.id).length; if (!window.confirm(`“${m.home} vs ${m.away}” ကိုဖျက်မလား? ချိတ်ထားသော လောင်းမှတ်တမ်း ${linked} ခုလည်း ဖျက်မည်။`)) return; await save({ ...store!, matches: matches.filter(x => x.id !== m.id), bets: bets.filter(x => x.matchId !== m.id) }); if (editingMatchId === m.id) resetMatchForm(); flash('Match နှင့် ချိတ်ထားသော record များ ဖျက်ပြီးပါပြီ။'); };
-  const editBet = (s: Settlement) => { setEditingBetId(s.bet.id); setBetForm({ matchId: s.bet.matchId, ruleId: s.bet.ruleId, selection: s.bet.selection, note: s.bet.note, amount: String(s.bet.amount) }); window.scrollTo({ top: 0, behavior: 'smooth' }); };
+  const editBet = (s: Settlement) => {
+    setEditingBetId(s.bet.id);
+    setBetForm({
+      matchId: s.bet.matchId,
+      ruleId: s.bet.ruleId,
+      selection: s.bet.selection,
+      note: s.bet.note,
+      amount: String(s.bet.amount),
+      lateReceivedAt: s.bet.placedAt ? s.bet.placedAt.slice(0, 16) : '',
+      lateReason: s.bet.lateReason || '',
+    });
+    window.scrollTo({ top: 0, behavior: 'smooth' });
+  };
   const deleteBet = async (s: Settlement) => { if (!window.confirm(`ထိုးငွေ ${money(s.bet.amount)} Ks record ကိုဖျက်မလား?`)) return; await save({ ...store!, bets: bets.filter(x => x.id !== s.bet.id) }); if (editingBetId === s.bet.id) resetBetForm(); flash('လောင်းမှတ်တမ်း ဖျက်ပြီးပါပြီ။'); };
   (window as any).footballPosActions = { editMatch, deleteMatch, editBet, deleteBet, commitRuleChange };
   const reportRows = () => [['No.', 'Match', 'Rule', 'ရွေးချယ်မှု', 'လောင်းငွေ', 'Result', '% (+)', '% (-)', 'WIN', 'LOSE', 'Status'], ...daySettlements.map((s, i) => [String(i + 1), `${s.match.home} vs ${s.match.away}`, s.rule.code, selectionLabel(s), money(s.bet.amount), s.match.postponed ? 'P:P' : s.match.homeScore === null ? '' : `${s.match.homeScore}:${s.match.awayScore}`, s.band.outcome === 'win' ? String(s.band.rate) : '', s.band.outcome === 'loss' ? String(s.band.rate) : '', s.signed > 0 ? money(s.signed) : '', s.signed < 0 ? `-${money(s.signed)}` : '', s.label]), ['', '', '', '', '', '', '', '', 'WIN', money(grossWin), ''], ['', '', '', '', '', '', '', '', `WIN - ${store?.settings.winDeduction ?? 0}%`, money(adjustedWin), ''], ['', '', '', '', '', '', '', '', `Com (${store?.settings.commission ?? 0}%)`, money(commission), ''], ['', '', '', '', '', '', '', '', 'LOSE', `-${money(grossLoss)}`, ''], ['', '', '', '', '', '', '', '', 'TOTAL', `${total < 0 ? '-' : ''}${money(total)}`, '']];
   const exportPdf = async () => { const rows = reportRows(); const html = `<!doctype html><html><head><meta charset="utf-8"><style>body{font-family:Arial,sans-serif;padding:22px;color:#13261a}h1{font-size:20px}table{width:100%;border-collapse:collapse;font-size:10px}td,th{border:1px solid #8da393;padding:5px;text-align:left}th{background:#d6e7b0} .n{text-align:right}</style></head><body><h1>Football Bet POS — Daily Settlement (${activeDate})</h1><table><thead><tr>${rows[0].map(x => `<th>${x}</th>`).join('')}</tr></thead><tbody>${rows.slice(1).map(r => `<tr>${r.map(x => `<td>${x}</td>`).join('')}</tr>`).join('')}</tbody></table><p>WIN: ${money(grossWin)} &nbsp; WIN - ${store?.settings.winDeduction ?? 0}%: ${money(adjustedWin)} &nbsp; Com (${store?.settings.commission ?? 0}%): ${money(commission)} &nbsp; LOSE: -${money(grossLoss)} &nbsp; TOTAL: ${total < 0 ? '-' : ''}${money(total)}</p></body></html>`; if (await window.footballPos.data.exportPdf(`football-settlement-${activeDate}`, html)) flash('PDF export ပြီးပါပြီ။'); };
   (window as Window & { footballPosReportMode?: boolean }).footballPosReportMode = page === 'report';
   if (!store) return <main className="loading">Football Bet POS ဖွင့်နေသည်…</main>;
-  return <main><header><div><p className="eyebrow">OFFLINE DESKTOP POS</p><h1>Football Bet POS</h1></div><div className="day-picker"><label>အလုပ်လုပ်မည့်ရက်<input type="date" value={activeDate} onChange={e => { setActiveDate(e.target.value); setBetForm({ matchId: '', ruleId: '', selection: 'home', note: '', amount: '' }); }}/></label><small>ရက်ပြောင်းလျှင် စာရင်းများ မပေါင်းပါ</small></div><nav>{([['matches','Matches & Rules'],['ledger','လောင်းမှတ်တမ်း'],['report','Daily Report'],['settings','Settings']] as const).map(([id, text]) => <button key={id} className={page === id ? 'active' : ''} onClick={() => setPage(id)}>{text}</button>)}</nav></header>{notice && <div className="notice">{notice}</div>}
+  return <main><header><div><p className="eyebrow">OFFLINE DESKTOP POS</p><h1>Football Bet POS</h1></div><div className="day-picker"><label>အလုပ်လုပ်မည့်ရက်<input type="date" value={activeDate} onChange={e => { setActiveDate(e.target.value); setBetForm({ matchId: '', ruleId: '', selection: 'home', note: '', amount: '', lateReceivedAt: '', lateReason: '' }); }}/></label><small>ရက်ပြောင်းလျှင် စာရင်းများ မပေါင်းပါ</small></div><nav>{([['matches','Matches & Rules'],['ledger','လောင်းမှတ်တမ်း'],['report','Daily Report'],['settings','Settings']] as const).map(([id, text]) => <button key={id} className={page === id ? 'active' : ''} onClick={() => setPage(id)}>{text}</button>)}</nav></header>{notice && <div className="notice">{notice}</div>}
   {page === 'matches' && <section className="grid"><article className="card form-card"><h2>Match အသစ်နှင့် Rule သတ်မှတ်ရန်</h2><p className="muted">{activeDate} အတွက် match ထည့်နေသည်။ Code ကိုသာမက line အောက်၊ တိတိ၊ အထက် ရလဒ်ကို ပွဲတစ်ပွဲစီအတွက် ပြောင်းနိုင်သည်။</p><form onSubmit={addMatch}><div className="form-grid"><label>Time<input type="time" value={matchForm.time} onChange={e => setMatchForm({ ...matchForm, time: e.target.value })}/></label><label>ဘယ်အသင်း<input value={matchForm.home} onChange={e => setMatchForm({ ...matchForm, home: e.target.value })}/></label><label>ညာအသင်း<input value={matchForm.away} onChange={e => setMatchForm({ ...matchForm, away: e.target.value })}/></label></div>{matchForm.rules.map((rule, index) => <div className="rule-box" key={rule.id}><div className="rule-head"><b>{index + 1}. Flexible rule</b>{matchForm.rules.length > 1 && <button type="button" className="link danger" onClick={() => setMatchForm({ ...matchForm, rules: matchForm.rules.filter(x => x.id !== rule.id) })}>ဖျက်</button>}</div><RuleEditor rule={rule} onChange={next => setMatchForm({ ...matchForm, rules: matchForm.rules.map(x => x.id === rule.id ? next : x) })}/></div>)}<button type="button" className="secondary" onClick={() => setMatchForm({ ...matchForm, rules: [...matchForm.rules, defaultRule('body')] })}>+ Rule ထပ်ထည့်</button><button type="submit">Match သိမ်းမည်</button></form></article><article className="card"><h2>{activeDate} Match များ</h2>{dayMatches.length === 0 ? <p className="muted">ဤရက်အတွက် Match မရှိသေးပါ။ ရက်ဟောင်း data မပေါင်းပါ။</p> : dayMatches.map(m => <MatchCard key={m.id} match={m} onSave={saveResult}/>)}</article></section>}
-  {page === 'ledger' && <section className="grid"><article className="card form-card"><h2>လောင်းမှတ်တမ်း ထည့်ရန်</h2><p className="muted">{activeDate} အတွက်သာ မှတ်တမ်းထည့်မည်။ Customer name မလိုပါ။</p><form onSubmit={addBet}><label>Match<select value={betForm.matchId} onChange={e => { const m = dayMatches.find(x => x.id === e.target.value); setBetForm({ ...betForm, matchId: e.target.value, ruleId: m?.rules[0]?.id || '', selection: m?.rules[0]?.market === 'total' ? 'up' : 'home' }); }}><option value="">ရွေးပါ</option>{dayMatches.map(m => <option value={m.id} key={m.id}>{m.time} — {m.home} vs {m.away}</option>)}</select></label><label>Rule<select value={betForm.ruleId} onChange={e => { const r = selectedMatch?.rules.find(x => x.id === e.target.value); setBetForm({ ...betForm, ruleId: e.target.value, selection: r?.market === 'total' ? 'up' : 'home' }); }}><option value="">ရွေးပါ</option>{selectedMatch?.rules.map(r => <option value={r.id} key={r.id}>{r.market === 'body' ? 'BD' : 'O/U'} — {r.code}</option>)}</select></label>{selectedRule && <label>ရွေးချယ်မှု<select value={betForm.selection} onChange={e => setBetForm({ ...betForm, selection: e.target.value as Selection })}>{(selectedRule.market === 'body' ? [['home', selectedMatch?.home], ['away', selectedMatch?.away]] : [['up','Up'], ['down','Down']]).map(([v, text]) => <option value={v} key={v}>{text}</option>)}</select></label>}<label>မှတ်ချက် / အသင်းအမည်<input value={betForm.note} onChange={e => setBetForm({ ...betForm, note: e.target.value })} placeholder="ဥပမာ: Aung Aung — Team A"/></label><label>ထိုးငွေ (Ks)<input type="number" min="1" value={betForm.amount} onChange={e => setBetForm({ ...betForm, amount: e.target.value })}/></label><button type="submit">လောင်းမှတ်တမ်း သိမ်းမည်</button></form></article><article className="card"><h2>{activeDate} မှတ်တမ်းများ ({dayBets.length})</h2><LedgerTable rows={daySettlements}/></article></section>}
+  {page === 'ledger' && (
+    <section className="grid">
+      <article className="card form-card">
+        <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginBottom: '8px' }}>
+          <h2>{editingBetId ? 'လောင်းမှတ်တမ်း ပြင်ရန်' : 'လောင်းမှတ်တမ်း ထည့်ရန်'}</h2>
+          {editingBetId && <span className="edit-badge">Editing Mode</span>}
+        </div>
+        <p className="muted">{activeDate} အတွက် မှတ်တမ်းထည့်နေသည်။ အသင်း သို့မဟုတ် Over/Under ကို ချက်ချင်းနှိပ်၍ ရွေးချယ်နိုင်ပါသည်။</p>
+        
+        <form onSubmit={addBet}>
+          <div>
+            <label style={{ marginBottom: '6px' }}>
+              Match ရွေးပါ
+              <input
+                type="text"
+                placeholder="🔍 အသင်းနာမည်ဖြင့် ရှာရန်..."
+                value={matchSearch}
+                onChange={e => setMatchSearch(e.target.value)}
+                style={{ marginBottom: '6px' }}
+              />
+            </label>
+            <select
+              value={betForm.matchId}
+              onChange={e => {
+                const m = dayMatches.find(x => x.id === e.target.value);
+                const activeRule = m?.rules.find(r => r.status !== 'closed') || m?.rules[0];
+                setBetForm({
+                  ...betForm,
+                  matchId: e.target.value,
+                  ruleId: activeRule?.id || '',
+                  selection: activeRule?.market === 'total' ? 'up' : 'home',
+                });
+              }}
+            >
+              <option value="">-- Match ရွေးပါ ({filteredDayMatches.length} ပွဲ) --</option>
+              {filteredDayMatches.map(m => (
+                <option value={m.id} key={m.id}>
+                  {m.time} — {m.home} vs {m.away}
+                </option>
+              ))}
+            </select>
+          </div>
+
+          {selectedMatch && (
+            <>
+              <div className="selected-match-card">
+                <span className="match-time-badge">{selectedMatch.time}</span>
+                <span className="match-teams-display">
+                  <b>{selectedMatch.home}</b> <em style={{ margin: '0 6px', color: '#68786c' }}>vs</em> <b>{selectedMatch.away}</b>
+                </span>
+              </div>
+
+              <label>
+                အကြေး (Rule) ရွေးပါ
+                <div className="rule-pills">
+                  {selectedMatch.rules.map(r => (
+                    <button
+                      key={r.id}
+                      type="button"
+                      className={`rule-pill ${betForm.ruleId === r.id ? 'selected' : ''} ${r.status === 'closed' ? 'closed' : ''}`}
+                      onClick={() => setBetForm(curr => ({
+                        ...curr,
+                        ruleId: r.id,
+                        selection: r.market === 'total' ? 'up' : 'home'
+                      }))}
+                    >
+                      <span>{r.market === 'body' ? '⚽ BD' : '🎯 O/U'} <b>{r.code}</b></span>
+                      {r.status === 'closed' && <small style={{ marginLeft: '4px', color: '#b23b36' }}>[ပိတ်]</small>}
+                    </button>
+                  ))}
+                </div>
+              </label>
+
+              {selectedRule && (
+                <label>
+                  ရွေးချယ်မှု (Selection)
+                  <div className="selection-buttons">
+                    {selectedRule.market === 'body' ? (
+                      <>
+                        <button
+                          type="button"
+                          className={`select-btn ${betForm.selection === 'home' ? 'selected' : ''}`}
+                          onClick={() => setBetForm({ ...betForm, selection: 'home' })}
+                        >
+                          <span className="team-role">အိမ်ရှင် (ဘယ်)</span>
+                          <span className="team-name">{selectedMatch.home}</span>
+                        </button>
+                        <button
+                          type="button"
+                          className={`select-btn ${betForm.selection === 'away' ? 'selected' : ''}`}
+                          onClick={() => setBetForm({ ...betForm, selection: 'away' })}
+                        >
+                          <span className="team-role">အဝေးကွင်း (ညာ)</span>
+                          <span className="team-name">{selectedMatch.away}</span>
+                        </button>
+                      </>
+                    ) : (
+                      <>
+                        <button
+                          type="button"
+                          className={`select-btn ${betForm.selection === 'up' ? 'selected' : ''}`}
+                          onClick={() => setBetForm({ ...betForm, selection: 'up' })}
+                        >
+                          <span className="team-role">ဂိုးပေါင်း</span>
+                          <span className="team-name">⬆️ Over (အထက်)</span>
+                        </button>
+                        <button
+                          type="button"
+                          className={`select-btn ${betForm.selection === 'down' ? 'selected' : ''}`}
+                          onClick={() => setBetForm({ ...betForm, selection: 'down' })}
+                        >
+                          <span className="team-role">ဂိုးပေါင်း</span>
+                          <span className="team-name">⬇️ Under (အောက်)</span>
+                        </button>
+                      </>
+                    )}
+                  </div>
+                </label>
+              )}
+
+              {selectedRule?.status === 'closed' && (
+                <div className="late-entry-box">
+                  <div className="late-entry-title">⚠️ Late Entry သတိပေးချက်</div>
+                  <p style={{ margin: '3px 0 8px', fontSize: '11px', color: '#773531' }}>
+                    ဤ rule သည် {selectedRule.closedAt ? new Date(selectedRule.closedAt).toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' }) : 'ယခင်'} တွင် ပိတ်ထားပြီးဖြစ်သည်။ အရင်လက်ခံထားသော စာရင်းဖြစ်ပါက အချက်အလက်ဖြည့်ပါ။
+                  </p>
+                  <label style={{ fontSize: '12px', marginTop: '6px' }}>
+                    လက်ခံရရှိချိန် (Received Time)
+                    <input
+                      type="datetime-local"
+                      value={betForm.lateReceivedAt}
+                      onChange={e => setBetForm({ ...betForm, lateReceivedAt: e.target.value })}
+                    />
+                  </label>
+                  <label style={{ fontSize: '12px', marginTop: '6px' }}>
+                    နောက်ကျရသည့် အကြောင်းရင်း
+                    <input
+                      value={betForm.lateReason}
+                      onChange={e => setBetForm({ ...betForm, lateReason: e.target.value })}
+                      placeholder="ဥပမာ: ဖုန်းလိုင်းမမိ၍ နောက်ကျမှ သွင်းခြင်း"
+                    />
+                  </label>
+                </div>
+              )}
+            </>
+          )}
+
+          <label>
+            မှတ်ချက် / အသင်းအမည်
+            <input
+              value={betForm.note}
+              onChange={e => setBetForm({ ...betForm, note: e.target.value })}
+              placeholder="ဥပမာ: ဦးအောင်, ဖုန်းနံပါတ် သို့မဟုတ် Team name"
+            />
+          </label>
+
+          <label>
+            ထိုးငွေ (Ks)
+            <div className="amount-wrap">
+              <input
+                type="number"
+                min="1"
+                value={betForm.amount}
+                onChange={e => setBetForm({ ...betForm, amount: e.target.value })}
+                placeholder="ဥပမာ 50000"
+              />
+              {Number(betForm.amount) > 0 && (
+                <span className="amount-preview">{money(Number(betForm.amount))} Ks</span>
+              )}
+            </div>
+            <div className="quick-stakes">
+              {[5000, 10000, 20000, 50000, 100000, 200000, 500000, 1000000].map(amt => (
+                <button
+                  key={amt}
+                  type="button"
+                  className="stake-chip"
+                  onClick={() => setBetForm({ ...betForm, amount: String(amt) })}
+                >
+                  {money(amt)}
+                </button>
+              ))}
+              <button
+                type="button"
+                className="stake-chip clear"
+                onClick={() => setBetForm({ ...betForm, amount: '' })}
+              >
+                ✕ ရှင်းမည်
+              </button>
+            </div>
+          </label>
+
+          <div className="form-actions">
+            {editingBetId && (
+              <button type="button" className="secondary" onClick={resetBetForm}>
+                ✕ မပြင်တော့ပါ
+              </button>
+            )}
+            <button type="submit">
+              {editingBetId ? '💾 ပြင်ဆင်ချက် သိမ်းမည်' : '+ လောင်းမှတ်တမ်း သိမ်းမည်'}
+            </button>
+          </div>
+        </form>
+      </article>
+
+      <article className="card">
+        <h2>{activeDate} မှတ်တမ်းများ ({dayBets.length})</h2>
+        <LedgerTable rows={daySettlements} />
+      </article>
+    </section>
+  )}
   {page === 'report' && <section className="card report"><div className="report-head"><div><p className="eyebrow">DAILY SETTLEMENT</p><h2>{activeDate} စာရင်း</h2></div><div><button className="secondary" onClick={async () => { if (await window.footballPos.data.exportCsv(reportRows())) flash('Excel CSV export ပြီးပါပြီ။'); }}>Excel CSV ထုတ်</button><button onClick={() => void exportPdf()}>PDF ထုတ်</button></div></div><LedgerTable rows={daySettlements}/><div className="totals"><span>WIN <b>{money(grossWin)}</b></span><span>WIN - {store.settings.winDeduction}% <b>{money(adjustedWin)}</b></span><span>Com ({store.settings.commission}%) <b>{money(commission)}</b></span><span>LOSE <b>-{money(grossLoss)}</b></span><strong>TOTAL {total < 0 ? '-' : ''}{money(total)}</strong></div></section>}
   {page === 'settings' && <section className="card settings"><h2>Report Settings</h2><p className="muted">ပုံထဲက စာရင်းအတိုင်း WIN deduction နှင့် commission ကို ပြောင်းနိုင်သည်။</p><label>WIN deduction (%)<input type="number" min="0" max="100" value={store.settings.winDeduction} onChange={e => void save({ ...store, settings: { ...store.settings, winDeduction: Number(e.target.value) } })}/></label><label>Commission (%)<input type="number" min="0" max="100" value={store.settings.commission} onChange={e => void save({ ...store, settings: { ...store.settings, commission: Number(e.target.value) } })}/></label></section>}</main>;
 }
 function MatchCard({ match, onSave }: { match: Match; onSave: (m: Match, h: string, a: string, p: boolean) => void }) { const [h, setH] = useState(match.homeScore?.toString() ?? ''); const [a, setA] = useState(match.awayScore?.toString() ?? ''); const [p, setP] = useState(match.postponed); const [drafts, setDrafts] = useState<Rule[] | null>(null); const actions = (window as any).footballPosActions; const compact = { padding: '5px 8px', margin: '0 3px 0 0', fontSize: '11px' }; const group = { display: 'flex', alignItems: 'center', gap: '3px' }; const startChange = (markets: Market[]) => setDrafts(markets.map(defaultRule)); const describe = (band: Band) => band.outcome === 'refund' ? 'Refund' : `${band.rate}% ${band.outcome === 'win' ? 'Win' : 'Loss'}`; return <div className="match" style={{ alignItems: 'flex-start' }}><div style={{ flex: 1 }}><b>{match.time} · {match.home} <em>vs</em> {match.away}</b><div style={{ display: 'flex', gap: '6px', flexWrap: 'wrap', marginTop: '7px' }}>{match.rules.map(r => <div key={r.id} style={{ border: `1px solid ${r.status === 'closed' ? '#d7c7c5' : '#9bc28a'}`, background: r.status === 'closed' ? '#fbf5f4' : '#f2f8ed', borderRadius: '6px', padding: '5px 7px', fontSize: '11px' }}><b>{r.market === 'body' ? 'BD' : 'O/U'} {r.code}</b> · {r.status === 'closed' ? 'ပိတ်' : 'ဖွင့်'}<small style={{ display: 'block', marginTop: '2px', color: '#627563' }}>အောက် {describe(r.below)} · တိတိ {describe(r.equal)} · အထက် {describe(r.above)}</small></div>)}</div></div><div className="result" style={{ flexWrap: 'wrap', justifyContent: 'flex-end', rowGap: '7px', maxWidth: '470px' }}><div style={group}><span style={{ fontSize: '11px', color: '#607565', fontWeight: 700 }}>RESULT</span><input type="number" min="0" disabled={p} value={h} onChange={e => setH(e.target.value)}/><span>:</span><input type="number" min="0" disabled={p} value={a} onChange={e => setA(e.target.value)}/><label className="check"><input type="checkbox" checked={p} onChange={e => setP(e.target.checked)}/>P:P</label><button style={compact} onClick={() => onSave(match, h, a, p)}>သိမ်း</button></div><div style={group}><span style={{ fontSize: '11px', color: '#607565', fontWeight: 700 }}>ကြေးပြောင်း</span><button style={compact} className="secondary" onClick={() => startChange(['body'])}>BD</button><button style={compact} className="secondary" onClick={() => startChange(['total'])}>O/U</button><button style={compact} className="secondary" onClick={() => startChange(['body', 'total'])}>Both</button><button style={compact} className="secondary" onClick={() => actions.editMatch(match)}>ပြင်</button><button style={{ ...compact, background: '#a13c35' }} onClick={() => void actions.deleteMatch(match)}>ဖျက်</button></div>{drafts && <div style={{ width: '100%', background: '#f5f8f0', border: '1px solid #bdd6ad', borderRadius: '8px', padding: '10px' }}><b style={{ fontSize: '12px' }}>Rule အသစ် — ပိတ်မည့်အကြေးကို confirm မလုပ်မီ ပြင်ပါ</b>{drafts.map(rule => <RuleEditor key={rule.id} rule={rule} onChange={next => setDrafts(current => current?.map(x => x.id === rule.id ? next : x) ?? null)}/>)}<button style={compact} className="secondary" onClick={() => setDrafts(null)}>Cancel</button><button style={compact} onClick={async () => { if (await actions.commitRuleChange(match, drafts)) setDrafts(null); }}>Confirm & ဖွင့်</button></div>}</div></div>; }
-function LedgerTable({ rows }: { rows: Settlement[] }) { const editable = !(window as Window & { footballPosReportMode?: boolean }).footballPosReportMode; const actions = (window as any).footballPosActions; return <div className="table-wrap"><table><thead><tr><th>No.</th><th>မှတ်ချက်</th><th>Match / Rule</th><th>ထိုးငွေ</th><th>Result</th><th>% (+)</th><th>% (-)</th><th>WIN</th><th>LOSE</th><th>Status</th>{editable && <th>Action</th>}</tr></thead><tbody>{rows.length === 0 ? <tr><td colSpan={editable ? 11 : 10} className="empty">မှတ်တမ်းမရှိသေးပါ</td></tr> : rows.map((s, i) => <tr key={s.bet.id}><td>{i + 1}</td><td>{s.bet.note || '—'}</td><td>{s.match.home} vs {s.match.away}<small>{s.rule.market === 'body' ? 'BD' : 'O/U'} {s.rule.code} · {selectionLabel(s)}</small></td><td>{money(s.bet.amount)}</td><td>{s.match.postponed ? 'P:P' : s.match.homeScore === null ? '—' : `${s.match.homeScore}:${s.match.awayScore}`}</td><td>{s.band.outcome === 'win' ? s.band.rate : ''}</td><td>{s.band.outcome === 'loss' ? s.band.rate : ''}</td><td className="win">{s.signed > 0 ? money(s.signed) : ''}</td><td className="loss">{s.signed < 0 ? `-${money(s.signed)}` : ''}</td><td>{s.label}</td>{editable && <td><button className="table-action" onClick={() => actions.editBet(s)}>ပြင်</button><button className="table-action delete" onClick={() => void actions.deleteBet(s)}>ဖျက်</button></td>}</tr>)}</tbody></table></div>; }
+function LedgerTable({ rows }: { rows: Settlement[] }) {
+  const [filterText, setFilterText] = useState('');
+  const editable = !(window as Window & { footballPosReportMode?: boolean }).footballPosReportMode;
+  const actions = (window as any).footballPosActions;
+
+  const filtered = useMemo(() => {
+    const q = filterText.trim().toLowerCase();
+    if (!q) return rows;
+    return rows.filter(s =>
+      s.bet.note.toLowerCase().includes(q) ||
+      s.match.home.toLowerCase().includes(q) ||
+      s.match.away.toLowerCase().includes(q) ||
+      s.rule.code.toLowerCase().includes(q) ||
+      selectionLabel(s).toLowerCase().includes(q) ||
+      s.label.toLowerCase().includes(q)
+    );
+  }, [rows, filterText]);
+
+  return (
+    <div className="table-wrap">
+      <div className="table-header-tools">
+        <span style={{ fontSize: '12px', color: '#68786c' }}>
+          မှတ်တမ်း <b>{rows.length}</b> ခု {filterText && `(တွေ့ရှိ: ${filtered.length})`}
+        </span>
+        <input
+          type="text"
+          className="table-search-input"
+          placeholder="🔍 မှတ်ချက် / အသင်း ရှာရန်..."
+          value={filterText}
+          onChange={e => setFilterText(e.target.value)}
+        />
+      </div>
+      <table>
+        <thead>
+          <tr>
+            <th>No.</th>
+            <th>မှတ်ချက်</th>
+            <th>Match / Rule</th>
+            <th>ထိုးငွေ</th>
+            <th>Result</th>
+            <th>% (+)</th>
+            <th>% (-)</th>
+            <th>WIN</th>
+            <th>LOSE</th>
+            <th>Status</th>
+            {editable && <th>Action</th>}
+          </tr>
+        </thead>
+        <tbody>
+          {filtered.length === 0 ? (
+            <tr>
+              <td colSpan={editable ? 11 : 10} className="empty">
+                {filterText ? 'ရှာဖွေမှုနှင့် ကိုက်ညီသော မှတ်တမ်းမရှိပါ' : 'မှတ်တမ်းမရှိသေးပါ'}
+              </td>
+            </tr>
+          ) : (
+            filtered.map((s, i) => (
+              <tr key={s.bet.id}>
+                <td>{i + 1}</td>
+                <td>{s.bet.note || '—'}</td>
+                <td>
+                  <b>{s.match.home}</b> vs <b>{s.match.away}</b>
+                  <small>{s.rule.market === 'body' ? 'BD' : 'O/U'} {s.rule.code} · <span style={{ color: '#164e2d', fontWeight: 600 }}>{selectionLabel(s)}</span></small>
+                </td>
+                <td>{money(s.bet.amount)}</td>
+                <td>{s.match.postponed ? 'P:P' : s.match.homeScore === null ? '—' : `${s.match.homeScore}:${s.match.awayScore}`}</td>
+                <td>{s.band.outcome === 'win' ? s.band.rate : ''}</td>
+                <td>{s.band.outcome === 'loss' ? s.band.rate : ''}</td>
+                <td className="win">{s.signed > 0 ? money(s.signed) : ''}</td>
+                <td className="loss">{s.signed < 0 ? `-${money(s.signed)}` : ''}</td>
+                <td>{s.label}</td>
+                {editable && (
+                  <td>
+                    <button className="table-action" onClick={() => actions.editBet(s)}>ပြင်</button>
+                    <button className="table-action delete" onClick={() => void actions.deleteBet(s)}>ဖျက်</button>
+                  </td>
+                )}
+              </tr>
+            ))
+          )}
+        </tbody>
+      </table>
+    </div>
+  );
+}
