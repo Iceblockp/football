@@ -25,11 +25,17 @@ const labels: Record<Outcome, string> = { win: 'အမြတ်', loss: 'အရ�
 function settle(bet: Bet, match: Match, rule: Rule): Settlement {
   if (match.postponed) return { bet, match, rule, band: action('refund', 0), signed: 0, label: 'P:P / ပြန်အမ်း' };
   if (match.homeScore === null || match.awayScore === null) return { bet, match, rule, band: action('refund', 0), signed: 0, label: 'Pending' };
-  let value: number;
-  if (rule.market === 'body') value = bet.selection === 'home' ? match.homeScore - match.awayScore : match.awayScore - match.homeScore;
-  else value = bet.selection === 'up' ? match.homeScore + match.awayScore : -(match.homeScore + match.awayScore);
-  const threshold = rule.market === 'total' && bet.selection === 'down' ? -rule.line : rule.line;
-  const band = value < threshold ? rule.below : value === threshold ? rule.equal : rule.above;
+  // Every market is quoted from one base perspective: Home for Body and Up
+  // for O/U. Away and Down are the same condition's exact inverse; their
+  // score/total must not be compared to a reversed line.
+  const value = rule.market === 'body'
+    ? match.homeScore - match.awayScore
+    : match.homeScore + match.awayScore;
+  const baseBand = value < rule.line ? rule.below : value === rule.line ? rule.equal : rule.above;
+  const oppositeSide = (rule.market === 'body' && bet.selection === 'away') || (rule.market === 'total' && bet.selection === 'down');
+  const band = oppositeSide && baseBand.outcome !== 'refund'
+    ? action(baseBand.outcome === 'win' ? 'loss' : 'win', baseBand.rate)
+    : baseBand;
   const signed = band.outcome === 'win' ? bet.amount * band.rate / 100 : band.outcome === 'loss' ? -bet.amount * band.rate / 100 : 0;
   const label = band.outcome === 'refund' ? 'ပြန်အမ်း' : `${band.rate}% ${labels[band.outcome]}`;
   return { bet, match, rule, band, signed, label };
