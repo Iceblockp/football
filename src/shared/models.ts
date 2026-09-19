@@ -7,6 +7,8 @@ export interface Rule {
   id: string; code: string; market: Market; line: number;
   below: Band; equal: Band; above: Band;
   status?: 'active' | 'closed'; effectiveAt?: string; closedAt?: string;
+  /** Default placeholder rule while the bookmaker's actual odds are unavailable. */
+  provisional?: boolean;
 }
 export interface Match {
   id: string; date: string; time: string; home: string; away: string;

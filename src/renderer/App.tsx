@@ -6,7 +6,7 @@ const uid = () => crypto.randomUUID();
 const today = () => new Date().toISOString().slice(0, 10);
 const money = (n: number) => new Intl.NumberFormat('en-US', { maximumFractionDigits: 0 }).format(Math.abs(n));
 const action = (outcome: Outcome, rate: number): Band => ({ outcome, rate: outcome === 'refund' ? 0 : Number(rate) || 0 });
-const defaultRule = (market: Market): Rule => {
+const defaultRule = (market: Market, provisional: boolean | number = false): Rule => {
   const code = market === 'body' ? '1+80' : '2-60';
   const parsed = parseMyanmarOdds(code);
   return {
@@ -19,6 +19,7 @@ const defaultRule = (market: Market): Rule => {
     above: parsed ? parsed.above : action('win', 100),
     status: 'active',
     effectiveAt: new Date().toISOString(),
+    provisional: provisional === true,
   };
 };
 const labels: Record<Outcome, string> = { win: 'အမြတ်', loss: 'အရှုံး', refund: 'ပြန်အမ်း' };
@@ -53,7 +54,7 @@ function RuleEditor({ rule, onChange }: { rule: Rule; onChange: (r: Rule) => voi
   const presets = rule.market === 'body' ? BODY_ODDS_PRESETS : TOTAL_ODDS_PRESETS;
 
   const handleMarketChange = (market: Market) => {
-    onChange({ ...defaultRule(market), id: rule.id });
+    onChange({ ...defaultRule(market), id: rule.id, provisional: rule.provisional });
   };
 
   const handlePresetSelect = (code: string) => {
@@ -154,14 +155,14 @@ function RuleEditor({ rule, onChange }: { rule: Rule; onChange: (r: Rule) => voi
 }
 export function App() {
   const [store, setStore] = useState<Store | null>(null); const [page, setPage] = useState<'matches' | 'ledger' | 'report' | 'settings'>('matches'); const [notice, setNotice] = useState(''); const [activeDate, setActiveDate] = useState(today());
-  const [matchForm, setMatchForm] = useState({ time: '19:00', home: '', away: '', rules: [defaultRule('body'), defaultRule('total')] as Rule[] }); const [editingMatchId, setEditingMatchId] = useState<string | null>(null);
+  const [matchForm, setMatchForm] = useState({ time: '19:00', home: '', away: '', rules: [defaultRule('body', true), defaultRule('total', true)] as Rule[] }); const [editingMatchId, setEditingMatchId] = useState<string | null>(null);
   const [betForm, setBetForm] = useState({ matchId: '', ruleId: '', selection: 'home' as Selection, note: '', amount: '', lateReceivedAt: '', lateReason: '' }); const [editingBetId, setEditingBetId] = useState<string | null>(null); const [matchSearch, setMatchSearch] = useState('');
   useEffect(() => { void window.footballPos.data.load().then(setStore); }, []);
   useEffect(() => {
     const rules = (store?.matches ?? []).flatMap(match => match.rules);
     document.querySelectorAll('option').forEach(option => {
       const rule = rules.find(item => item.id === (option as HTMLOptionElement).value);
-      if (rule) option.textContent = `${rule.market === 'body' ? 'BD' : 'O/U'} — ${rule.code} [${rule.status === 'closed' ? 'ပိတ် · Late entry only' : 'ဖွင့်'}]`;
+      if (rule) option.textContent = `${rule.market === 'body' ? 'BD' : 'O/U'} — ${rule.code} [${rule.status === 'closed' ? 'ပိတ် · Late entry only' : rule.provisional ? 'ယာယီ · အကြေးမထွက်သေး' : 'ဖွင့်'}]`;
     });
   }, [store, betForm.matchId]);
   const save = async (next: Store) => { setStore(next); await window.footballPos.data.save(next); };
@@ -176,8 +177,8 @@ export function App() {
   const settlements = useMemo(() => store ? bets.map(b => { const m = matches.find(x => x.id === b.matchId); const r = b.ruleSnapshot ?? m?.rules.find(x => x.id === b.ruleId); return m && r ? settle(b, m, r) : null; }).filter(Boolean) as Settlement[] : [], [store, bets, matches]);
   const daySettlements = settlements.filter(x => x.bet.date === activeDate); const settled = daySettlements.filter(x => x.label !== 'Pending'); const grossWin = settled.filter(x => x.signed > 0).reduce((n, x) => n + x.signed, 0); const grossLoss = settled.filter(x => x.signed < 0).reduce((n, x) => n + x.signed, 0); const adjustedWin = grossWin * (1 - (store?.settings.winDeduction ?? 0) / 100); const turnover = grossWin + Math.abs(grossLoss); const commission = turnover * (store?.settings.commission ?? 0) / 100; const total = adjustedWin + commission + grossLoss;
   const flash = (message: string) => { setNotice(message); setTimeout(() => setNotice(''), 3500); };
-  const resetMatchForm = () => { setEditingMatchId(null); setMatchForm({ time: '19:00', home: '', away: '', rules: [defaultRule('body'), defaultRule('total')] }); };
-  const addMatch = async (e: React.FormEvent) => { e.preventDefault(); if (!store || !matchForm.home.trim() || !matchForm.away.trim()) return flash('အသင်းနှစ်သင်းလုံး ထည့်ပါ။'); const previous = editingMatchId ? matches.find(x => x.id === editingMatchId) : undefined; const history = previous?.rules.filter(rule => rule.status === 'closed') ?? []; const updated: Match = { id: previous?.id || uid(), ...matchForm, rules: previous ? [...history, ...matchForm.rules] : matchForm.rules, date: activeDate, home: matchForm.home.trim(), away: matchForm.away.trim(), homeScore: previous?.homeScore ?? null, awayScore: previous?.awayScore ?? null, postponed: previous?.postponed ?? false }; await save({ ...store, matches: previous ? matches.map(x => x.id === previous.id ? updated : x) : [...matches, updated] }); resetMatchForm(); flash(previous ? 'Active rule များကို ပြင်ပြီးပါပြီ။ ပိတ်ထားသော rule history မပြောင်းပါ။' : 'Match နှင့် flexible rules ကို သိမ်းပြီးပါပြီ။'); };
+  const resetMatchForm = () => { setEditingMatchId(null); setMatchForm({ time: '19:00', home: '', away: '', rules: [defaultRule('body', true), defaultRule('total', true)] }); };
+  const addMatch = async (e: React.FormEvent) => { e.preventDefault(); if (!store || !matchForm.home.trim() || !matchForm.away.trim()) return flash('အသင်းနှစ်သင်းလုံး ထည့်ပါ။'); const previous = editingMatchId ? matches.find(x => x.id === editingMatchId) : undefined; const history = previous?.rules.filter(rule => rule.status === 'closed') ?? []; const provisionalIds = new Set(previous?.rules.filter(rule => rule.provisional).map(rule => rule.id) ?? []); const finalizedRules = previous ? matchForm.rules.map(rule => provisionalIds.has(rule.id) ? { ...rule, provisional: false } : rule) : matchForm.rules; const updated: Match = { id: previous?.id || uid(), ...matchForm, rules: previous ? [...history, ...finalizedRules] : finalizedRules, date: activeDate, home: matchForm.home.trim(), away: matchForm.away.trim(), homeScore: previous?.homeScore ?? null, awayScore: previous?.awayScore ?? null, postponed: previous?.postponed ?? false }; const provisionalBets = previous ? bets.filter(bet => bet.matchId === previous.id && provisionalIds.has(bet.ruleId)) : []; if (provisionalBets.length && !window.confirm(`Temporary rule ဖြင့် ထိုးထားသော record ${provisionalBets.length} ခုကို ယခု actual rule ဖြင့် update လုပ်မလား?`)) return; const refreshedBets = previous ? bets.map(bet => { const newRule = updated.rules.find(rule => rule.id === bet.ruleId); return newRule && provisionalIds.has(bet.ruleId) ? { ...bet, ruleSnapshot: structuredClone(newRule) } : bet; }) : bets; await save({ ...store, matches: previous ? matches.map(x => x.id === previous.id ? updated : x) : [...matches, updated], bets: refreshedBets }); resetMatchForm(); flash(previous && provisionalBets.length ? `Actual rule ကိုအတည်ပြုပြီး record ${provisionalBets.length} ခုကို update လုပ်ပြီးပါပြီ။` : previous ? 'Active rule များကို ပြင်ပြီးပါပြီ။ ပိတ်ထားသော rule history မပြောင်းပါ။' : 'Match နှင့် temporary default rule များကို သိမ်းပြီးပါပြီ။'); };
   const saveResult = async (m: Match, homeScore: string, awayScore: string, postponed: boolean) => { if (!store) return; const updated = { ...m, homeScore: postponed ? null : Number(homeScore), awayScore: postponed ? null : Number(awayScore), postponed }; await save({ ...store, matches: matches.map(x => x.id === m.id ? updated : x) }); flash(postponed ? 'P:P / Refund အဖြစ်သိမ်းပြီးပါပြီ။' : 'Result သိမ်းပြီး settlement ကို update လုပ်ပြီးပါပြီ။'); };
   const resetBetForm = () => { setEditingBetId(null); setBetForm({ matchId: '', ruleId: '', selection: 'home', note: '', amount: '', lateReceivedAt: '', lateReason: '' }); };
   const addBet = async (e: React.FormEvent) => {
