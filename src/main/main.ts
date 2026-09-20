@@ -4,7 +4,7 @@ import { existsSync } from 'node:fs';
 import { join } from 'node:path';
 import type { Store } from '../shared/models';
 
-const emptyStore = (): Store => ({ matches: [], bets: [], settings: { winDeduction: 5, commission: 2 } });
+const emptyStore = (): Store => ({ teams: [], matches: [], bets: [], settings: { winDeduction: 5, commission: 2 } });
 let mainWindow: BrowserWindow | null = null;
 const dataPath = () => join(app.getPath('userData'), 'football-pos.json');
 function trusted(event: Electron.IpcMainInvokeEvent) {
@@ -14,7 +14,10 @@ function trusted(event: Electron.IpcMainInvokeEvent) {
 }
 async function loadStore(): Promise<Store> {
   if (!existsSync(dataPath())) return emptyStore();
-  try { return JSON.parse(await readFile(dataPath(), 'utf8')) as Store; } catch { return emptyStore(); }
+  try {
+    const raw = JSON.parse(await readFile(dataPath(), 'utf8')) as Partial<Store>;
+    return { ...emptyStore(), ...raw, teams: Array.isArray(raw.teams) ? raw.teams : [], matches: Array.isArray(raw.matches) ? raw.matches : [], bets: Array.isArray(raw.bets) ? raw.bets : [], settings: { ...emptyStore().settings, ...raw.settings } };
+  } catch { return emptyStore(); }
 }
 async function saveStore(store: Store) { await mkdir(app.getPath('userData'), { recursive: true }); await writeFile(dataPath(), JSON.stringify(store, null, 2), 'utf8'); }
 function createWindow() {

@@ -2,6 +2,8 @@ export type Market = 'body' | 'total';
 export type Selection = 'home' | 'away' | 'up' | 'down';
 export type Outcome = 'win' | 'loss' | 'refund';
 
+export interface Team { id: string; name: string; code: string }
+
 export interface Band { outcome: Outcome; rate: number }
 export interface Rule {
   id: string; code: string; market: Market; line: number;
@@ -22,7 +24,7 @@ export interface Bet {
   /** Immutable rule used at acceptance time, so later odds changes cannot rewrite history. */
   ruleSnapshot?: Rule; placedAt?: string; lateEntry?: boolean; lateReason?: string;
 }
-export interface Store { matches: Match[]; bets: Bet[]; settings: { winDeduction: number; commission: number } }
+export interface Store { teams: Team[]; matches: Match[]; bets: Bet[]; settings: { winDeduction: number; commission: number } }
 export interface Settlement {
   bet: Bet; match: Match; rule: Rule; band: Band; signed: number; label: string;
 }
