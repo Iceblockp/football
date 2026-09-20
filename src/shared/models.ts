@@ -17,6 +17,8 @@ export interface Match {
 export interface Bet {
   id: string; date: string; matchId: string; ruleId: string; selection: Selection;
   note: string; amount: number;
+  /** Display order inside one day's ledger. This is independent of the immutable bet ID. */
+  sortOrder?: number;
   /** Immutable rule used at acceptance time, so later odds changes cannot rewrite history. */
   ruleSnapshot?: Rule; placedAt?: string; lateEntry?: boolean; lateReason?: string;
 }
