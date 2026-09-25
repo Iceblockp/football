@@ -21,11 +21,11 @@ const parseQuickEntry = (input: string, teams: Team[]): QuickRequest | string =>
   const team = [...teams].sort((a, b) => b.code.length - a.code.length).find(item => compact.startsWith(item.code.toLowerCase()));
   if (!team) return 'Team code မတွေ့ပါ။ Teams မှာ short code အရင်ထည့်ပါ။';
   const rest = compact.slice(team.code.length);
-  const match = rest.match(/^([bud])(\d+(?:[kmw])?)$/);
+  const match = rest.match(/^([bud])(\d+(?:[kmwl])?)$/);
   if (!match) return 'Format မမှန်ပါ။ ဥပမာ chb50000, chu50k, mud5w';
   const unit = match[2].slice(-1);
-  const numeric = Number(unit === 'k' || unit === 'm' || unit === 'w' ? match[2].slice(0, -1) : match[2]);
-  const multiplier = unit === 'k' ? 1_000 : unit === 'w' ? 10_000 : unit === 'm' ? 1_000_000 : 1;
+  const numeric = Number(unit === 'k' || unit === 'm' || unit === 'w' || unit === 'l' ? match[2].slice(0, -1) : match[2]);
+  const multiplier = unit === 'k' ? 1_000 : unit === 'w' ? 10_000 : unit === 'l' ? 100_000 : unit === 'm' ? 1_000_000 : 1;
   return numeric > 0 ? { team, action: match[1] as QuickAction, amount: numeric * multiplier } : 'လောင်းငွေသည် 0 ထက်ကြီးရမည်။';
 };
 const action = (outcome: Outcome, rate: number): Band => ({ outcome, rate: outcome === 'refund' ? 0 : Number(rate) || 0 });
@@ -187,7 +187,7 @@ function TeamSelect({ label, value, teams, onChange }: { label: string; value: s
 }
 export function App() {
   const [store, setStore] = useState<Store | null>(null); const [page, setPage] = useState<'matches' | 'ledger' | 'report' | 'settings'>('matches'); const [notice, setNotice] = useState(''); const [activeDate, setActiveDate] = useState(today());
-  const [matchForm, setMatchForm] = useState({ time: '19:00', home: '', away: '', rules: [defaultRule('body', true), defaultRule('total', true)] as Rule[] }); const [editingMatchId, setEditingMatchId] = useState<string | null>(null);
+  const [matchForm, setMatchForm] = useState({ time: '19:00', home: '', away: '', rules: [defaultRule('body'), defaultRule('total')] as Rule[] }); const [editingMatchId, setEditingMatchId] = useState<string | null>(null);
   const [betForm, setBetForm] = useState({ matchId: '', ruleId: '', selection: 'home' as Selection, note: '', amount: '', lateReceivedAt: '', lateReason: '' }); const [editingBetId, setEditingBetId] = useState<string | null>(null); const [insertAfterBetId, setInsertAfterBetId] = useState<string | null>(null); const [matchSearch, setMatchSearch] = useState(''); const [quickEntry, setQuickEntry] = useState(''); const [quickCandidates, setQuickCandidates] = useState<{ request: QuickRequest; matches: Match[] } | null>(null); const [teamForm, setTeamForm] = useState({ name: '', code: '' }); const [reportSortMode, setReportSortMode] = useState<'latest' | 'ledger'>('latest'); const [confirmation, setConfirmation] = useState<{ message: string; resolve: (confirmed: boolean) => void } | null>(null);
   useEffect(() => { void window.footballPos.data.load().then(setStore); }, []);
   useEffect(() => {
@@ -211,7 +211,7 @@ export function App() {
   const flash = (message: string) => { setNotice(message); setTimeout(() => setNotice(''), 3500); };
   const askConfirm = (message: string) => new Promise<boolean>(resolve => setConfirmation({ message, resolve }));
   const closeConfirm = (confirmed: boolean) => { confirmation?.resolve(confirmed); setConfirmation(null); };
-  const resetMatchForm = () => { setEditingMatchId(null); setMatchForm({ time: '19:00', home: '', away: '', rules: [defaultRule('body', true), defaultRule('total', true)] }); };
+  const resetMatchForm = () => { setEditingMatchId(null); setMatchForm({ time: '19:00', home: '', away: '', rules: [defaultRule('body'), defaultRule('total')] }); };
   const addMatch = async (e: React.FormEvent) => { e.preventDefault(); if (!store || !matchForm.home.trim() || !matchForm.away.trim()) return flash('အသင်းနှစ်သင်းလုံး ထည့်ပါ။'); const previous = editingMatchId ? matches.find(x => x.id === editingMatchId) : undefined; const history = previous?.rules.filter(rule => rule.status === 'closed') ?? []; const provisionalIds = new Set(previous?.rules.filter(rule => rule.provisional).map(rule => rule.id) ?? []); const finalizedRules = previous ? matchForm.rules.map(rule => provisionalIds.has(rule.id) ? { ...rule, provisional: false } : rule) : matchForm.rules; const updated: Match = { id: previous?.id || uid(), ...matchForm, rules: previous ? [...history, ...finalizedRules] : matchForm.rules, date: activeDate, home: matchForm.home.trim(), away: matchForm.away.trim(), homeScore: previous?.homeScore ?? null, awayScore: previous?.awayScore ?? null, postponed: previous?.postponed ?? false }; const provisionalBets = previous ? bets.filter(bet => bet.matchId === previous.id && provisionalIds.has(bet.ruleId)) : []; if (provisionalBets.length && !await askConfirm(`Temporary rule ဖြင့် ထိုးထားသော record ${provisionalBets.length} ခုကို ယခု actual rule ဖြင့် update လုပ်မလား?`)) return; const refreshedBets = previous ? bets.map(bet => { const newRule = updated.rules.find(rule => rule.id === bet.ruleId); return newRule && provisionalIds.has(bet.ruleId) ? { ...bet, ruleSnapshot: structuredClone(newRule) } : bet; }) : bets; await save({ ...store, matches: previous ? matches.map(x => x.id === previous.id ? updated : x) : [...matches, updated], bets: refreshedBets }); resetMatchForm(); flash(previous && provisionalBets.length ? `Actual rule ကိုအတည်ပြုပြီး record ${provisionalBets.length} ခုကို update လုပ်ပြီးပါပြီ။` : previous ? 'Active rule များကို ပြင်ပြီးပါပြီ။ ပိတ်ထားသော rule history မပြောင်းပါ။' : 'Match နှင့် temporary default rule များကို သိမ်းပြီးပါပြီ။'); };
   const saveResult = async (m: Match, homeScore: string, awayScore: string, postponed: boolean) => { if (!store) return; const updated = { ...m, homeScore: postponed ? null : Number(homeScore), awayScore: postponed ? null : Number(awayScore), postponed }; await save({ ...store, matches: matches.map(x => x.id === m.id ? updated : x) }); flash(postponed ? 'P:P / Refund အဖြစ်သိမ်းပြီးပါပြီ။' : 'Result သိမ်းပြီး settlement ကို update လုပ်ပြီးပါပြီ။'); };
   const resetBetForm = () => { setEditingBetId(null); setInsertAfterBetId(null); setBetForm({ matchId: '', ruleId: '', selection: 'home', note: '', amount: '', lateReceivedAt: '', lateReason: '' }); };
@@ -341,7 +341,7 @@ export function App() {
         <div className="quick-entry-box">
           <div><b>⚡ Quick Entry</b><small>ဥပမာ <code>chb50000</code> (BD) · <code>chu50k</code> (Up) · <code>mud5w</code> (Down)</small></div>
           <div className="quick-entry-controls"><input autoFocus value={quickEntry} onChange={e => { setQuickEntry(e.target.value); setQuickCandidates(null); }} onKeyDown={e => { if (e.key === 'Enter') { e.preventDefault(); void submitQuickEntry(); } }} placeholder="team code + b/u/d + amount"/><button type="button" onClick={() => void submitQuickEntry()}>Enter ↵</button></div>
-          <small><b>b</b> = Body · <b>u</b> = Up · <b>d</b> = Down · <b>k</b> = 1,000 · <b>w</b> = 10,000 · <b>m</b> = 1,000,000</small>
+          <small><b>b</b> = Body · <b>u</b> = Up · <b>d</b> = Down · <b>k</b> = 1,000 · <b>w</b> = 10,000 · <b>l</b> = 100,000 · <b>m</b> = 1,000,000</small>
           {insertAfterBetId && <small className="quick-insert-note">↳ Quick Entry record ကို ရွေးထားသော No. ၏နောက်သို့ ထည့်မည်</small>}
           {quickCandidates && <div className="quick-candidates"><b>{quickCandidates.request.team.name} ပါသော match {quickCandidates.matches.length} ပွဲတွေ့သည် — တစ်ပွဲရွေးပါ</b><div>{quickCandidates.matches.map(match => <button type="button" className="secondary" key={match.id} onClick={() => void saveQuickBet(quickCandidates.request, match)}>{match.time} · {match.home} vs {match.away}</button>)}</div></div>}
           <div className="quick-match-reference"><b>ဒီနေ့ Match code များ</b><div>{dayMatches.length === 0 ? <small>Match မရှိသေးပါ။</small> : dayMatches.map(match => { const homeCode = teams.find(team => team.name === match.home)?.code ?? '—'; const awayCode = teams.find(team => team.name === match.away)?.code ?? '—'; return <div className="quick-match-card" key={match.id}><span>{match.time}</span><b>{match.home} <code>{homeCode}</code></b><em>vs</em><b>{match.away} <code>{awayCode}</code></b></div>; })}</div></div>
