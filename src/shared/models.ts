@@ -1,5 +1,6 @@
 export type Market = 'body' | 'total';
 export type Selection = 'home' | 'away' | 'up' | 'down';
+export type BodyBaseSide = 'home' | 'away';
 export type Outcome = 'win' | 'loss' | 'refund';
 export type ViewMode = 'dai' | 'player';
 
@@ -9,6 +10,8 @@ export interface Band { outcome: Outcome; rate: number }
 export interface Rule {
   id: string; code: string; market: Market; line: number;
   below: Band; equal: Band; above: Band;
+  /** Team whose goal difference the Body rule code is quoted from. Old rules default to home. */
+  bodyBaseSide?: BodyBaseSide;
   status?: 'active' | 'closed'; effectiveAt?: string; closedAt?: string;
   /** Default placeholder rule while the bookmaker's actual odds are unavailable. */
   provisional?: boolean;
