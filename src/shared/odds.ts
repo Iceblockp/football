@@ -8,6 +8,7 @@ export interface OddsPreset {
 }
 
 export const BODY_ODDS_PRESETS: OddsPreset[] = [
+  { code: 'D', label: 'D (0 ဂိုး / သရေ ပြန်အမ်း)', market: 'body', description: '0 ဂိုးတိတိ ပြန်အမ်း · အထက် 100% မြတ် · အောက် 100% ရှုံး' },
   { code: '+20', label: '+20 (0+20)', market: 'body', description: '0 ဂိုးတိတိ 20% မြတ် · အထက် 100% မြတ်' },
   { code: '-30', label: '-30 (0-30)', market: 'body', description: '0 ဂိုးတိတိ 30% ရှုံး · အထက် 100% မြတ်' },
   { code: '0', label: '0 (ဘောမ / သရေ)', market: 'body', description: 'သရေ ပြန်အမ်း · နိုင် 100% · ရှုံး 100%' },
@@ -30,6 +31,7 @@ export const BODY_ODDS_PRESETS: OddsPreset[] = [
 ];
 
 export const TOTAL_ODDS_PRESETS: OddsPreset[] = [
+  { code: 'D', label: 'D (0 ဂိုး ပြန်အမ်း)', market: 'total', description: '0 ဂိုးတိတိ ပြန်အမ်း · အထက် 100% မြတ် · အောက် 100% ရှုံး' },
   { code: '+20', label: '+20 (0+20)', market: 'total', description: '0 ဂိုးတိတိ 20% မြတ် · အထက် 100% မြတ်' },
   { code: '-30', label: '-30 (0-30)', market: 'total', description: '0 ဂိုးတိတိ 30% ရှုံး · အထက် 100% မြတ်' },
   { code: '1.5', label: '1.5 (၁ ဂိုး ခွဲ)', market: 'total', description: '၁ ဂိုး အောက် · ၂ ဂိုး အထက်' },
@@ -57,7 +59,7 @@ const band = (outcome: Outcome, rate: number): Band => ({
 });
 
 /**
- * Parses a Myanmar football odds code (e.g. "1+80", "+20", "2-60", "2D", "0.5")
+ * Parses a Myanmar football odds code (e.g. "1+80", "+20", "2-60", "D", "2D", "0.5")
  * and returns the corresponding line and below/equal/above bands.
  */
 export function parseMyanmarOdds(code: string): { line: number; below: Band; equal: Band; above: Band } | null {
@@ -90,7 +92,15 @@ export function parseMyanmarOdds(code: string): { line: number; below: Band; equ
     };
   }
 
-  // 3. D lines: e.g. "2D", "3D" — exact line is refunded.
+  // 3. D lines: "D" means line 0; "2D" / "3D" refund at that numbered line.
+  if (/^d$/i.test(clean)) {
+    return {
+      line: 0,
+      below: band('loss', 100),
+      equal: band('refund', 0),
+      above: band('win', 100),
+    };
+  }
   const drawMatch = clean.match(/^(\d+(?:\.\d+)?)\s*d$/i);
   if (drawMatch) {
     return {
