@@ -3,6 +3,19 @@ export type Selection = 'home' | 'away' | 'up' | 'down';
 export type BodyBaseSide = 'home' | 'away';
 export type Outcome = 'win' | 'loss' | 'refund';
 export type ViewMode = 'dai' | 'player';
+export type Bookmaker = 'viber' | 'messenger';
+
+export interface BookmakerSettings {
+  mode: 'direct' | 'summary';
+  /** Direct mode: percentage removed from a player's winning amount. */
+  playerWinDeduction: number;
+  /** Direct mode: percentage returned against a player's losing amount. */
+  playerLossRebate: number;
+  /** Summary mode: percentage removed from gross player wins. */
+  winTaxRate: number;
+  /** Summary mode: percentage of gross win + absolute gross loss credited to the player. */
+  turnoverCommissionRate: number;
+}
 
 export interface Team { id: string; name: string; code: string }
 
@@ -17,18 +30,26 @@ export interface Rule {
   provisional?: boolean;
 }
 export interface Match {
-  id: string; date: string; time: string; home: string; away: string;
+  id: string; date: string; bookmaker: Bookmaker; time: string; home: string; away: string;
   homeScore: number | null; awayScore: number | null; postponed: boolean; rules: Rule[];
 }
 export interface Bet {
-  id: string; date: string; matchId: string; ruleId: string; selection: Selection;
+  id: string; date: string; bookmaker: Bookmaker; matchId: string; ruleId: string; selection: Selection;
   note: string; amount: number;
   /** Display order inside one day's ledger. This is independent of the immutable bet ID. */
   sortOrder?: number;
   /** Immutable rule used at acceptance time, so later odds changes cannot rewrite history. */
   ruleSnapshot?: Rule; placedAt?: string; lateEntry?: boolean; lateReason?: string;
 }
-export interface Store { teams: Team[]; matches: Match[]; bets: Bet[]; settings: { daiLossRate: number; daiWinRate: number; commission: number; view: ViewMode } }
+export interface Store {
+  teams: Team[];
+  matches: Match[];
+  bets: Bet[];
+  settings: {
+    view: ViewMode;
+    bookmakerSettings: Record<Bookmaker, BookmakerSettings>;
+  };
+}
 export interface Settlement {
   bet: Bet; match: Match; rule: Rule; band: Band; signed: number; label: string;
 }

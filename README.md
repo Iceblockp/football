@@ -9,7 +9,9 @@ Offline Electron desktop app for recording football Body and O/U bets and produc
 - Body selections (left/home or right/away) and O/U selections (Up or Down).
 - Result entry and `P:P` postponed/refund support.
 - Bet ledger with a separate stake amount field; no customer/user field is required.
-- Daily report totals with configurable win deduction and commission. Commission is calculated from `gross WIN + absolute gross LOSE`, matching the supplied record format.
+- Separate Viber and Messenger ledgers: matches, bets, reports, exports, and commission settings are isolated by channel as well as date.
+- Viber defaults to a 3% player-win deduction and a 2% player-loss rebate.
+- Messenger defaults to a 5% gross-win deduction plus a 2% commission on `gross WIN + absolute gross LOSE`, credited to the player.
 - Excel-compatible UTF-8 CSV and PDF export.
 - Local data storage in Electron's application-data directory.
 

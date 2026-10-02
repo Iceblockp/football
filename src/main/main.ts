@@ -2,9 +2,11 @@ import { app, BrowserWindow, dialog, ipcMain } from 'electron';
 import { mkdir, readFile, writeFile } from 'node:fs/promises';
 import { existsSync } from 'node:fs';
 import { join } from 'node:path';
-import type { Store } from '../shared/models';
+import type { BookmakerSettings, Store } from '../shared/models';
 
-const emptyStore = (): Store => ({ teams: [], matches: [], bets: [], settings: { daiLossRate: 3, daiWinRate: 2, commission: 0, view: 'dai' } });
+const defaultViberSettings = (): BookmakerSettings => ({ mode: 'direct', playerWinDeduction: 3, playerLossRebate: 2, winTaxRate: 0, turnoverCommissionRate: 0 });
+const defaultMessengerSettings = (): BookmakerSettings => ({ mode: 'summary', playerWinDeduction: 0, playerLossRebate: 0, winTaxRate: 5, turnoverCommissionRate: 2 });
+const emptyStore = (): Store => ({ teams: [], matches: [], bets: [], settings: { view: 'dai', bookmakerSettings: { viber: defaultViberSettings(), messenger: defaultMessengerSettings() } } });
 let mainWindow: BrowserWindow | null = null;
 const dataPath = () => join(app.getPath('userData'), 'football-pos.json');
 function trusted(event: Electron.IpcMainInvokeEvent) {
@@ -16,8 +18,20 @@ async function loadStore(): Promise<Store> {
   if (!existsSync(dataPath())) return emptyStore();
   try {
     const raw = JSON.parse(await readFile(dataPath(), 'utf8')) as Partial<Store>;
-    const legacySettings = raw.settings as Partial<Store['settings']> & { winDeduction?: number } | undefined;
-    return { ...emptyStore(), ...raw, teams: Array.isArray(raw.teams) ? raw.teams : [], matches: Array.isArray(raw.matches) ? raw.matches : [], bets: Array.isArray(raw.bets) ? raw.bets : [], settings: { ...emptyStore().settings, ...legacySettings, daiLossRate: legacySettings?.daiLossRate ?? 3, daiWinRate: legacySettings?.daiWinRate ?? 2, view: legacySettings?.view ?? 'dai' } };
+    const legacySettings = raw.settings as (Partial<Store['settings']> & { daiLossRate?: number; daiWinRate?: number; commission?: number; winDeduction?: number }) | undefined;
+    const savedBookmakers = legacySettings?.bookmakerSettings;
+    const viber = savedBookmakers?.viber
+      ? { ...defaultViberSettings(), ...savedBookmakers.viber }
+      : { ...defaultViberSettings(), playerWinDeduction: legacySettings?.daiLossRate ?? 3, playerLossRebate: legacySettings?.daiWinRate ?? 2 };
+    const messenger = { ...defaultMessengerSettings(), ...savedBookmakers?.messenger };
+    return {
+      ...emptyStore(),
+      ...raw,
+      teams: Array.isArray(raw.teams) ? raw.teams : [],
+      matches: Array.isArray(raw.matches) ? raw.matches.map(match => ({ ...match, bookmaker: match.bookmaker ?? 'viber' })) : [],
+      bets: Array.isArray(raw.bets) ? raw.bets.map(bet => ({ ...bet, bookmaker: bet.bookmaker ?? 'viber' })) : [],
+      settings: { view: legacySettings?.view ?? 'dai', bookmakerSettings: { viber, messenger } },
+    };
   } catch { return emptyStore(); }
 }
 async function saveStore(store: Store) { await mkdir(app.getPath('userData'), { recursive: true }); await writeFile(dataPath(), JSON.stringify(store, null, 2), 'utf8'); }
