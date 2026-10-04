@@ -32,6 +32,17 @@ export interface Rule {
 export interface Match {
   id: string; date: string; bookmaker: Bookmaker; time: string; home: string; away: string;
   homeScore: number | null; awayScore: number | null; postponed: boolean; rules: Rule[];
+  /** Real kickoff instant. `date` remains the business/report date. */
+  kickoffAt?: string;
+  apiFixtureId?: number;
+  apiHome?: string;
+  apiAway?: string;
+  /** True when API away maps to the local left/home team. */
+  apiSidesReversed?: boolean;
+  apiStatus?: string;
+  apiLeague?: string;
+  resultSource?: 'manual' | 'api-football';
+  resultCheckedAt?: string;
 }
 export interface Bet {
   id: string; date: string; bookmaker: Bookmaker; matchId: string; ruleId: string; selection: Selection;
@@ -48,11 +59,38 @@ export interface Store {
   settings: {
     view: ViewMode;
     bookmakerSettings: Record<Bookmaker, BookmakerSettings>;
+    automation: {
+      enabled: boolean;
+      pollMinutes: number;
+      windowStart: string;
+      windowEnd: string;
+      autoExportPdf: boolean;
+      exportedReports: string[];
+    };
   };
 }
 export interface Settlement {
   bet: Bet; match: Match; rule: Rule; band: Band; signed: number; label: string;
 }
+export interface ApiFixture {
+  id: number;
+  kickoffAt: string;
+  home: string;
+  away: string;
+  league: string;
+  status: string;
+  elapsed: number | null;
+  homeScore: number | null;
+  awayScore: number | null;
+  fullTimeHome: number | null;
+  fullTimeAway: number | null;
+}
 export interface DesktopApi {
-  data: { load: () => Promise<Store>; save: (store: Store) => Promise<void>; exportCsv: (rows: string[][]) => Promise<boolean>; exportPdf: (title: string, html: string) => Promise<boolean> };
+  data: { load: () => Promise<Store>; save: (store: Store) => Promise<void>; exportCsv: (rows: string[][]) => Promise<boolean>; exportPdf: (title: string, html: string) => Promise<boolean>; exportPdfAuto: (title: string, html: string) => Promise<string> };
+  apiFootball: {
+    hasKey: () => Promise<boolean>;
+    saveKey: (key: string) => Promise<boolean>;
+    test: () => Promise<{ ok: boolean; message: string }>;
+    fixturesByDate: (date: string) => Promise<ApiFixture[]>;
+  };
 }
