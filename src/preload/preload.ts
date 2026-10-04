@@ -15,5 +15,8 @@ const api: DesktopApi = {
     test: () => ipcRenderer.invoke('api-football:test'),
     fixturesByDate: (date) => ipcRenderer.invoke('api-football:fixtures-date', date),
   },
+  viber: {
+    sendFile: (groupName, filePath) => ipcRenderer.invoke('viber:send-file', groupName, filePath),
+  },
 };
 contextBridge.exposeInMainWorld('footballPos', api);

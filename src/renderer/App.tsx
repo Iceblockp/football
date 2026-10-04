@@ -281,7 +281,7 @@ export function App() {
   const [activeBookmaker, setActiveBookmaker] = useState<Bookmaker>('viber');
   const [matchForm, setMatchForm] = useState({ time: '19:00', nextDay: false, home: '', away: '', rules: [defaultRule('body'), defaultRule('total')] as Rule[] }); const [editingMatchId, setEditingMatchId] = useState<string | null>(null);
   const [betForm, setBetForm] = useState({ matchId: '', ruleId: '', selection: 'home' as Selection, note: '', amount: '', lateReceivedAt: '', lateReason: '' }); const [editingBetId, setEditingBetId] = useState<string | null>(null); const [insertAfterBetId, setInsertAfterBetId] = useState<string | null>(null); const [matchSearch, setMatchSearch] = useState(''); const [quickEntry, setQuickEntry] = useState(''); const [quickCandidates, setQuickCandidates] = useState<{ request: QuickRequest; matches: Match[] } | null>(null); const [teamForm, setTeamForm] = useState({ name: '', code: '' }); const [reportSortMode, setReportSortMode] = useState<'latest' | 'ledger'>('latest'); const [confirmation, setConfirmation] = useState<{ message: string; resolve: (confirmed: boolean) => void } | null>(null);
-  const [apiKeyInput, setApiKeyInput] = useState(''); const [apiKeyConfigured, setApiKeyConfigured] = useState(false); const [apiMessage, setApiMessage] = useState(''); const [automationBusy, setAutomationBusy] = useState(false); const [nextAutomationCheckAt, setNextAutomationCheckAt] = useState<number | null>(null); const [automationClock, setAutomationClock] = useState(Date.now());
+  const [apiKeyInput, setApiKeyInput] = useState(''); const [apiKeyConfigured, setApiKeyConfigured] = useState(false); const [apiMessage, setApiMessage] = useState(''); const [automationBusy, setAutomationBusy] = useState(false); const [nextAutomationCheckAt, setNextAutomationCheckAt] = useState<number | null>(null); const [automationClock, setAutomationClock] = useState(Date.now()); const [viberSendBusy, setViberSendBusy] = useState(false);
   const [fixturePicker, setFixturePicker] = useState<{ match: Match; fixtures: ApiFixture[]; searchDate: string } | null>(null); const [fixtureFilter, setFixtureFilter] = useState(''); const [fixturePickerLoading, setFixturePickerLoading] = useState(false);
   const fixtureDateCache = useRef(new Map<string, ApiFixture[]>());
   const checkApiResultsRef = useRef<(manual?: boolean) => Promise<void>>(async () => undefined);
@@ -483,12 +483,72 @@ export function App() {
     }
     flash(`API result ဘယ်/ညာကို ${updated.apiSidesReversed ? 'ပြောင်း' : 'မူရင်း'} mapping အဖြစ် ပြင်ပြီးပါပြီ။`);
   };
+  const processReadyReports = async (baseStore: Store, candidateKeys: string[]) => {
+    const exported = new Set(baseStore.settings.automation.exportedReports);
+    const sent = new Set(baseStore.settings.viberDelivery.sentReports);
+    const pending = new Set(baseStore.settings.viberDelivery.pendingReports);
+    let delivery = baseStore.settings.viberDelivery;
+    for (const key of [...new Set(candidateKeys)]) {
+      const [date, bookmakerValue] = key.split(':') as [string, Bookmaker];
+      if (!date || !['viber', 'messenger'].includes(bookmakerValue)) continue;
+      const groupBets = baseStore.bets.filter(bet => bet.date === date && bet.bookmaker === bookmakerValue);
+      const involvedIds = new Set(groupBets.map(bet => bet.matchId));
+      const ready = groupBets.length > 0 && [...involvedIds].every(id => {
+        const match = baseStore.matches.find(item => item.id === id);
+        return Boolean(match && (match.postponed || (match.homeScore !== null && match.awayScore !== null)));
+      });
+      if (!ready) continue;
+      try {
+        const report = automatedReport(baseStore, date, bookmakerValue);
+        if (!report.count) continue;
+        if (delivery.autoSend && delivery.groupName.trim() && !sent.has(key)) pending.add(key);
+        let filePath = '';
+        if (baseStore.settings.automation.autoExportPdf || (delivery.autoSend && !sent.has(key))) {
+          filePath = await window.footballPos.data.exportPdfAuto(report.title, report.html);
+          exported.add(key);
+        }
+        if (delivery.autoSend && delivery.groupName.trim() && !sent.has(key)) {
+          const result = await window.footballPos.viber.sendFile(delivery.groupName, filePath);
+          if (result.ok) {
+            sent.add(key);
+            pending.delete(key);
+            delivery = { ...delivery, lastStatus: 'sent', lastMessage: `${date} ${bookmakerValue === 'viber' ? 'Viber' : 'Messenger'} PDF ကို Viber group သို့ အလိုအလျောက်ပို့ပြီးပါပြီ။`, lastSentAt: new Date().toISOString() };
+          } else {
+            delivery = { ...delivery, lastStatus: 'failed', lastMessage: result.message };
+          }
+        }
+      } catch (error) {
+        delivery = { ...delivery, lastStatus: 'failed', lastMessage: error instanceof Error ? error.message : 'PDF auto export/send မအောင်မြင်ပါ။' };
+      }
+    }
+    return {
+      ...baseStore,
+      settings: {
+        ...baseStore.settings,
+        automation: { ...baseStore.settings.automation, exportedReports: [...exported] },
+        viberDelivery: { ...delivery, sentReports: [...sent], pendingReports: [...pending] },
+      },
+    };
+  };
+  const reportKeysForDates = (dates: string[]) => [...new Set(dates)].flatMap(date => [`${date}:viber`, `${date}:messenger`]);
   const checkApiResults = async (manual = false) => {
     if (!store || !apiKeyConfigured || automationBusy) return;
     const linked = matches.filter(match => match.apiFixtureId && match.resultSource !== 'manual' && (!match.apiHome || !match.apiAway || !match.apiStatus || !finalApiStatuses.has(match.apiStatus) || match.homeScore === null || match.awayScore === null));
-    if (!linked.length) { if (manual) flash('စစ်ဆေးရန် ချိတ်ထားသော pending match မရှိပါ။'); return; }
+    const retryDeliveryKeys = store.settings.viberDelivery.autoSend ? store.settings.viberDelivery.pendingReports : [];
+    const manualDeliveryKeys = manual && store.settings.viberDelivery.autoSend ? reportKeysForDates([activeDate]) : [];
+    if (!linked.length && !retryDeliveryKeys.length && !manualDeliveryKeys.length) { if (manual) flash('စစ်ဆေးရန် ချိတ်ထားသော pending match မရှိပါ။'); return; }
     setAutomationBusy(true);
     try {
+      if (!linked.length) {
+        const sentBefore = new Set(store.settings.viberDelivery.sentReports).size;
+        const deliveredStore = await processReadyReports(store, [...retryDeliveryKeys, ...manualDeliveryKeys]);
+        await save(deliveredStore);
+        if (manual) {
+          const sentCount = new Set(deliveredStore.settings.viberDelivery.sentReports).size - sentBefore;
+          flash(sentCount > 0 ? `Ready ဖြစ်သော PDF ${sentCount} ဖိုင်ကို Viber သို့ပို့ပြီးပါပြီ။` : 'လက်ရှိရက်၏ Viber နှင့် Messenger report နှစ်ခုကို စစ်ပြီးပါပြီ။ ပို့ရန် ready ဖြစ်သော PDF အသစ်မရှိပါ။');
+        }
+        return;
+      }
       const fixtures: ApiFixture[] = [];
       const pendingDates = [...new Set(linked.map(match => kickoffLocalDate(match.kickoffAt) || match.date))].sort();
       for (const date of pendingDates) fixtures.push(...await window.footballPos.apiFootball.fixturesByDate(date));
@@ -509,25 +569,22 @@ export function App() {
       });
       let nextStore: Store = { ...store, matches: nextMatches };
       await save(nextStore);
-      if (store.settings.automation.autoExportPdf && settledCount) {
-        const exported = new Set(store.settings.automation.exportedReports);
-        const groupKeys = [...new Set(linked.map(match => `${match.date}:${match.bookmaker}`))];
-        for (const key of groupKeys) {
-          if (exported.has(key)) continue;
-          const [date, bookmakerValue] = key.split(':') as [string, Bookmaker];
-          const groupBets = nextStore.bets.filter(bet => bet.date === date && bet.bookmaker === bookmakerValue);
-          const involvedIds = new Set(groupBets.map(bet => bet.matchId));
-          const ready = groupBets.length > 0 && [...involvedIds].every(id => { const match = nextMatches.find(item => item.id === id); return Boolean(match && (match.postponed || (match.homeScore !== null && match.awayScore !== null))); });
-          if (!ready) continue;
-          const report = automatedReport(nextStore, date, bookmakerValue);
-          if (report.count) { await window.footballPos.data.exportPdfAuto(report.title, report.html); exported.add(key); }
-        }
-        if (exported.size !== store.settings.automation.exportedReports.length) {
-          nextStore = { ...nextStore, settings: { ...nextStore.settings, automation: { ...nextStore.settings.automation, exportedReports: [...exported] } } };
-          await save(nextStore);
-        }
+      // A result check is date-based, not tied to the channel currently selected in the UI.
+      // When either channel has a match checked for an accounting date, evaluate both PDFs so
+      // a ready, unsent counterpart is not left behind until another result changes.
+      const affectedDates = [
+        ...linked.map(match => match.date),
+        ...retryDeliveryKeys.map(key => key.split(':')[0]).filter(Boolean),
+      ];
+      const groupKeys = [...new Set([...reportKeysForDates(affectedDates), ...retryDeliveryKeys, ...manualDeliveryKeys])];
+      const sentBefore = new Set(nextStore.settings.viberDelivery.sentReports).size;
+      nextStore = await processReadyReports(nextStore, groupKeys);
+      await save(nextStore);
+      if (manual) {
+        const sentCount = new Set(nextStore.settings.viberDelivery.sentReports).size - sentBefore;
+        const resultMessage = settledCount ? `API မှ result ${settledCount} ပွဲ update လုပ်ပြီးပါပြီ။` : 'API စစ်ပြီးပါပြီ။ Final result အသစ်မရှိသေးပါ။';
+        flash(sentCount > 0 ? `${resultMessage} PDF ${sentCount} ဖိုင်ကို Viber သို့ပို့ပြီးပါပြီ။` : resultMessage);
       }
-      if (manual) flash(settledCount ? `API မှ result ${settledCount} ပွဲ update လုပ်ပြီးပါပြီ။` : 'API စစ်ပြီးပါပြီ။ Final result အသစ်မရှိသေးပါ။');
     } catch (error) { if (manual) flash(error instanceof Error ? error.message : 'Result စစ်ဆေးမှု မအောင်မြင်ပါ။'); }
     finally { setAutomationBusy(false); }
   };
@@ -606,6 +663,33 @@ export function App() {
     const title = `${activeBookmaker === 'viber' ? 'Viber' : 'Messenger'} · ${store!.settings.view === 'dai' ? 'Dai View' : 'Player View'}`;
     const html = `<!doctype html><html><head><meta charset="utf-8"><style>body{font-family:Arial,sans-serif;padding:22px;color:#13261a}h1{font-size:20px}h2{font-size:14px;margin:18px 0 6px}table{width:100%;border-collapse:collapse;font-size:10px}td,th{border:1px solid #8da393;padding:5px;text-align:left}th{background:#d6e7b0}.summary{width:320px}.summary td:last-child{text-align:right}.positive{color:#137645;font-weight:bold}.negative{color:#b23b36;font-weight:bold}.legend{font-size:10px;color:#5e715f}</style></head><body><h1>Football Bet POS — ${title} (${activeDate})</h1><table><thead><tr>${rows[0].map(x => `<th>${x}</th>`).join('')}</tr></thead><tbody>${rows.slice(1).map(r => `<tr>${r.map((x, index) => pdfCell(x, index)).join('')}</tr>`).join('')}</tbody></table><h2>Summary</h2><table class="summary"><thead><tr><th>Summary</th><th>Value</th></tr></thead><tbody>${summary.map(([label, value]) => `<tr><td>${label}</td><td class="${value.startsWith('+') ? 'positive' : value.startsWith('-') ? 'negative' : ''}">${value}</td></tr>`).join('')}</tbody></table><p class="legend">↔ = BD မူရင်းအခြေခံ rule သည် ညာအသင်းဘက်ဖြစ်သည်။</p></body></html>`;
     if (await window.footballPos.data.exportPdf(`football-settlement-${activeBookmaker}-${activeDate}`, html)) flash('PDF export ပြီးပါပြီ။');
+  };
+  const sendCurrentReportToViber = async () => {
+    if (!store || viberSendBusy) return;
+    const delivery = store.settings.viberDelivery;
+    if (!delivery.groupName.trim()) return flash('Settings တွင် Viber test group name အတိအကျ ထည့်ပါ။');
+    const report = automatedReport(store, activeDate, activeBookmaker);
+    if (!report.count) return flash(`${activeDate} အတွက် ပို့ရန် report record မရှိပါ။`);
+    setViberSendBusy(true);
+    try {
+      const filePath = await window.footballPos.data.exportPdfAuto(report.title, report.html);
+      const result = await window.footballPos.viber.sendFile(delivery.groupName, filePath);
+      const reportKey = `${activeDate}:${activeBookmaker}`;
+      const nextDelivery = {
+        ...delivery,
+        sentReports: result.ok ? [...new Set([...delivery.sentReports, reportKey])] : delivery.sentReports,
+        pendingReports: result.ok ? delivery.pendingReports.filter(key => key !== reportKey) : delivery.pendingReports,
+        lastStatus: result.ok ? 'sent' as const : 'failed' as const,
+        lastMessage: result.message,
+        lastSentAt: result.ok ? new Date().toISOString() : delivery.lastSentAt,
+      };
+      await save({ ...store, settings: { ...store.settings, viberDelivery: nextDelivery } });
+      flash(result.message);
+    } catch (error) {
+      const message = error instanceof Error ? error.message : 'Viber သို့ PDF မပို့နိုင်ပါ။';
+      await save({ ...store, settings: { ...store.settings, viberDelivery: { ...delivery, lastStatus: 'failed', lastMessage: message } } });
+      flash(message);
+    } finally { setViberSendBusy(false); }
   };
   const automationSettings = store?.settings.automation;
   const automationWindowActive = automationSettings ? inTimeWindow(myanmarClock(new Date(automationClock)), automationSettings.windowStart, automationSettings.windowEnd) : false;
@@ -848,6 +932,7 @@ export function App() {
     </section>
   )}
   {page === 'settings' && <section className="card" style={{ marginBottom: '20px' }}><p className="eyebrow">OVERNIGHT AUTOMATION</p><h2>API-Football Result Automation</h2><p className="muted">API key ကို encrypted storage တွင်သိမ်းသည်။ Project file နှင့် report များထဲ မထည့်ပါ။ App နှင့် Mac ကို ညအချိန်ဖွင့်ထားရမည်။</p><label>API Key<input type="password" autoComplete="off" value={apiKeyInput} onChange={e => setApiKeyInput(e.target.value)} placeholder={apiKeyConfigured ? 'Key သိမ်းပြီးသား — အသစ်ပြောင်းရန်သာ ထည့်ပါ' : 'API-Football key ထည့်ပါ'}/></label><button type="button" onClick={() => void saveApiKey()}>Key လုံခြုံစွာသိမ်းမည်</button><button type="button" className="secondary" onClick={() => void testApi()}>Connection စမ်းမည်</button>{apiMessage && <p className="muted">{apiMessage}</p>}<label className="check" style={{ margin: '14px 0 8px' }}><input type="checkbox" checked={store.settings.automation.enabled} onChange={e => void save({ ...store, settings: { ...store.settings, automation: { ...store.settings.automation, enabled: e.target.checked } } })}/> ညပိုင်း result အလိုအလျောက်စစ်မည်</label><div className="form-grid"><label>စစ်ဆေးချိန်မှ<input type="time" value={store.settings.automation.windowStart} onChange={e => void save({ ...store, settings: { ...store.settings, automation: { ...store.settings.automation, windowStart: e.target.value } } })}/></label><label>စစ်ဆေးချိန်အထိ<input type="time" value={store.settings.automation.windowEnd} onChange={e => void save({ ...store, settings: { ...store.settings, automation: { ...store.settings.automation, windowEnd: e.target.value } } })}/></label><label>မိနစ်ခြား<input type="number" min="5" max="60" value={store.settings.automation.pollMinutes} onChange={e => void save({ ...store, settings: { ...store.settings, automation: { ...store.settings.automation, pollMinutes: Math.max(5, Number(e.target.value) || 10) } } })}/></label></div><button type="button" disabled={automationBusy} onClick={() => void checkApiResults(true)}>{automationBusy ? 'စစ်ဆေးနေသည်…' : 'Result ယခုစစ်မည်'}</button><div className={`automation-status ${automationWindowActive ? 'active' : ''}`}><span className="automation-dot"/><div><b>{automationStatus}</b>{automationSettings?.enabled && <small>Myanmar time window {automationSettings.windowStart}–{automationSettings.windowEnd} · {automationSettings.pollMinutes} မိနစ်ခြား</small>}</div></div></section>}
+  {page === 'settings' && <section className="card viber-delivery-card" style={{ marginBottom: '20px' }}><p className="eyebrow">VIBER AUTO DELIVERY</p><h2>PDF ကို Viber Group သို့ပို့ရန်</h2><p className="muted">Viber တွင် ပို့လိုသည့် Group ကို ဖွင့်ထားပါ။ Result အားလုံး Final/P:P ဖြစ်သော report ကို PDF ထုတ်ပြီး Viber နှင့် Messenger ဖိုင်တစ်ခုစီ တစ်ကြိမ်သာ အလိုအလျောက်ပို့နိုင်သည်။</p><label>Viber Group Name<input value={store.settings.viberDelivery.groupName} onChange={e => void save({ ...store, settings: { ...store.settings, viberDelivery: { ...store.settings.viberDelivery, groupName: e.target.value } } })} placeholder="ဥပမာ ဒိုင် gp စစ် test"/></label><label className="check" style={{ margin: '14px 0 8px' }}><input type="checkbox" checked={store.settings.viberDelivery.autoSend} disabled={!store.settings.viberDelivery.groupName.trim()} onChange={e => void save({ ...store, settings: { ...store.settings, viberDelivery: { ...store.settings.viberDelivery, autoSend: e.target.checked } } })}/> PDF ထွက်ပြီးလျှင် ဤ Viber group သို့ အလိုအလျောက်ပို့မည်</label><button type="button" disabled={viberSendBusy || !store.settings.viberDelivery.groupName.trim()} onClick={() => void sendCurrentReportToViber()}>{viberSendBusy ? 'Viber သို့ပို့နေသည်…' : `လက်ရှိ ${activeBookmaker === 'viber' ? 'Viber' : 'Messenger'} Report PDF ကို Test ပို့မည်`}</button>{store.settings.viberDelivery.lastMessage && <div className={`automation-status ${store.settings.viberDelivery.lastStatus === 'sent' ? 'active' : ''}`}><span className="automation-dot"/><div><b>{store.settings.viberDelivery.lastMessage}</b>{store.settings.viberDelivery.lastSentAt && <small>{new Date(store.settings.viberDelivery.lastSentAt).toLocaleString('en-GB', { timeZone: 'Asia/Yangon' })}</small>}</div></div>}<p className="muted">App နှင့် Viber ကိုဖွင့်ထားပြီး target group ကိုရွေးထားရမည်။ ပို့ပြီးသော date/channel ကို မှတ်တမ်းတင်သဖြင့် နောက် interval တွင် ထပ်မပို့ပါ။ ပျက်ကွက်လျှင် နောက် interval တွင် retry လုပ်သည်။</p></section>}
   {page === 'settings' && <section className="card" style={{ marginBottom: '20px' }}><p className="eyebrow">CURRENT DATE DATA</p><h2>{activeDate} · {activeBookmaker === 'viber' ? 'Viber' : 'Messenger'}</h2><p className="muted">Match {dayMatches.length} ပွဲနှင့် လောင်းမှတ်တမ်း {dayBets.length} ခုကို အခြား channel သို့ ရွှေ့နိုင်သည်၊ သို့မဟုတ် မူရင်းကိုထားပြီး copy ကူးနိုင်သည်။</p><button type="button" onClick={() => void transferDayData('move')}>အခြား Channel သို့ ရွှေ့မည်</button><button type="button" className="secondary" onClick={() => void transferDayData('copy')}>မူရင်းထားပြီး Copy ကူးမည်</button></section>}
   {page === 'report' && <section className="card report"><div className="report-head"><div><p className="eyebrow">{activeBookmaker.toUpperCase()} DAILY SETTLEMENT · {store.settings.view === 'dai' ? 'ဒိုင် View' : 'Player View'}</p><h2>{activeDate} စာရင်း</h2></div><div><button className="secondary" onClick={async () => { if (await window.footballPos.data.exportCsv(csvRows())) flash('Excel CSV export ပြီးပါပြီ။'); }}>Excel CSV ထုတ်</button><button onClick={() => void exportPdf()}>PDF ထုတ်</button></div></div><LedgerTable rows={reportSettlements} settings={activeCommission} view={store.settings.view} totals={reportTotals} sortable sortMode={reportSortMode} onSortModeChange={setReportSortMode}/><SummaryPanel totals={reportTotals}/></section>}
   {page === 'settings' && <section className="settings-page"><article className="card settings"><h2>{activeBookmaker === 'viber' ? 'Viber' : 'Messenger'} Report Settings</h2><p className="muted">ဒိုင်တစ်ခုချင်းစီ၏ commission rule ကို သီးခြားသိမ်းသည်။ View ပြောင်းခြင်းသည် record data ကို မပြောင်းပါ။</p><label>View<select value={store.settings.view} onChange={e => void save({ ...store, settings: { ...store.settings, view: e.target.value as ViewMode } })}><option value="dai">ဒိုင် View</option><option value="player">Player View</option></select></label>{activeCommission.mode === 'direct' ? <><label>Player နိုင်လျှင် ဖြတ်မည့်နှုန်း (%)<input type="number" min="0" max="100" value={activeCommission.playerWinDeduction} onChange={e => updateBookmakerSettings({ playerWinDeduction: percent(Number(e.target.value)) })}/></label><label>Player ရှုံးလျှင် ပြန်ပေးမည့်နှုန်း (%)<input type="number" min="0" max="100" value={activeCommission.playerLossRebate} onChange={e => updateBookmakerSettings({ playerLossRebate: percent(Number(e.target.value)) })}/></label><p className="muted">လက်ရှိ Viber rule: Player Win {activeCommission.playerWinDeduction}% · Player Lose {activeCommission.playerLossRebate}%</p></> : <><label>Gross WIN မှ ဖြတ်မည့်နှုန်း (%)<input type="number" min="0" max="100" value={activeCommission.winTaxRate} onChange={e => updateBookmakerSettings({ winTaxRate: percent(Number(e.target.value)) })}/></label><label>Gross WIN + LOSE ပေါ် Player ကိုပေးမည့် Commission (%)<input type="number" min="0" max="100" value={activeCommission.turnoverCommissionRate} onChange={e => updateBookmakerSettings({ turnoverCommissionRate: percent(Number(e.target.value)) })}/></label><p className="muted">Messenger rule: WIN ကို {activeCommission.winTaxRate}% ဖြတ်ပြီး စုစုပေါင်း settled turnover ပေါ် {activeCommission.turnoverCommissionRate}% ကို Player အား ပြန်ပေးသည်။</p></>}</article><article className="card team-card"><h2>Team list · Quick Code</h2><p className="muted">Quick Entry အတွက် အသင်းအမည်နှင့် မထပ်သော short code သတ်မှတ်ပါ။ ဥပမာ Chelsea → ch</p><form className="team-form" onSubmit={addTeam}><label>Team name<input value={teamForm.name} onChange={e => setTeamForm({ ...teamForm, name: e.target.value })} placeholder="Chelsea"/></label><label>Short code<input value={teamForm.code} onChange={e => setTeamForm({ ...teamForm, code: e.target.value })} placeholder="ch" maxLength={12}/></label><button type="submit">+ Team ထည့်မည်</button></form>{teams.length === 0 ? <p className="muted">Team မရှိသေးပါ။</p> : <div className="team-list">{teams.map(team => <div key={team.id}><b>{team.name}</b><code>{team.code}</code><button type="button" className="link danger" onClick={() => void deleteTeam(team)}>ဖျက်</button></div>)}</div>}</article></section>}</div>{confirmation && <div className="confirm-overlay" role="dialog" aria-modal="true"><div className="confirm-modal"><h3>အတည်ပြုပါ</h3><p>{confirmation.message}</p><div><button type="button" className="secondary" onClick={() => closeConfirm(false)}>မလုပ်တော့ပါ</button><button type="button" autoFocus onClick={() => closeConfirm(true)}>အတည်ပြုမည်</button></div></div></div>}</main>;

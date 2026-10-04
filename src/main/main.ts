@@ -1,13 +1,17 @@
 import { app, BrowserWindow, dialog, ipcMain, powerSaveBlocker, safeStorage } from 'electron';
+import { execFile } from 'node:child_process';
 import { mkdir, readFile, writeFile } from 'node:fs/promises';
 import { existsSync } from 'node:fs';
-import { join } from 'node:path';
+import { join, resolve } from 'node:path';
+import { promisify } from 'node:util';
 import type { ApiFixture, BookmakerSettings, Store } from '../shared/models';
 
 const defaultViberSettings = (): BookmakerSettings => ({ mode: 'direct', playerWinDeduction: 3, playerLossRebate: 2, winTaxRate: 0, turnoverCommissionRate: 0 });
 const defaultMessengerSettings = (): BookmakerSettings => ({ mode: 'summary', playerWinDeduction: 0, playerLossRebate: 0, winTaxRate: 5, turnoverCommissionRate: 2 });
 const defaultAutomation = () => ({ enabled: false, pollMinutes: 10, windowStart: '00:00', windowEnd: '06:00', autoExportPdf: true, exportedReports: [] as string[] });
-const emptyStore = (): Store => ({ teams: [], matches: [], bets: [], settings: { view: 'dai', bookmakerSettings: { viber: defaultViberSettings(), messenger: defaultMessengerSettings() }, automation: defaultAutomation() } });
+const defaultViberDelivery = () => ({ groupName: '', autoSend: false, sentReports: [] as string[], pendingReports: [] as string[], lastStatus: 'idle' as const, lastMessage: '' });
+const emptyStore = (): Store => ({ teams: [], matches: [], bets: [], settings: { view: 'dai', bookmakerSettings: { viber: defaultViberSettings(), messenger: defaultMessengerSettings() }, automation: defaultAutomation(), viberDelivery: defaultViberDelivery() } });
+const execFileAsync = promisify(execFile);
 let mainWindow: BrowserWindow | null = null;
 let automationPowerBlocker: number | null = null;
 const dataPath = () => join(app.getPath('userData'), 'football-pos.json');
@@ -33,7 +37,7 @@ async function loadStore(): Promise<Store> {
       teams: Array.isArray(raw.teams) ? raw.teams : [],
       matches: Array.isArray(raw.matches) ? raw.matches.map(match => ({ ...match, bookmaker: match.bookmaker ?? 'viber' })) : [],
       bets: Array.isArray(raw.bets) ? raw.bets.map(bet => ({ ...bet, bookmaker: bet.bookmaker ?? 'viber' })) : [],
-      settings: { view: legacySettings?.view ?? 'dai', bookmakerSettings: { viber, messenger }, automation: { ...defaultAutomation(), ...legacySettings?.automation } },
+      settings: { view: legacySettings?.view ?? 'dai', bookmakerSettings: { viber, messenger }, automation: { ...defaultAutomation(), ...legacySettings?.automation }, viberDelivery: { ...defaultViberDelivery(), ...legacySettings?.viberDelivery } },
     };
   } catch { return emptyStore(); }
 }
@@ -81,6 +85,43 @@ async function renderPdf(target: string, html: string) {
     await writeFile(target, pdf);
   } finally { report.destroy(); }
 }
+async function sendFileToViber(groupName: string, filePath: string) {
+  if (process.platform !== 'darwin') throw new Error('Viber Desktop automation ကို လောလောဆယ် macOS တွင်သာ အသုံးပြုနိုင်သည်။');
+  const cleanGroup = groupName.trim();
+  if (!cleanGroup) throw new Error('Viber group name ထည့်ပါ။');
+  const reportsFolder = resolve(join(app.getPath('documents'), 'Football Bet POS Reports'));
+  const target = resolve(filePath);
+  if (!target.startsWith(`${reportsFolder}/`) || !existsSync(target)) throw new Error('ပို့မည့် PDF ကို Football Bet POS Reports folder တွင် မတွေ့ပါ။');
+  const script = `on run argv
+set groupName to item 1 of argv
+set pdfPath to item 2 of argv
+tell application id "com.viber.osx" to activate
+delay 1
+tell application "System Events"
+  tell process "Viber"
+    set frontmost to true
+    key code 53
+    delay 0.5
+    set {windowX, windowY} to position of window 1
+    set {windowWidth, windowHeight} to size of window 1
+    -- Viber keeps the attachment (+) button at the lower-left of the chat pane.
+    click at {windowX + 328, windowY + windowHeight - 28}
+    delay 1
+    keystroke "g" using {command down, shift down}
+    delay 0.5
+    keystroke pdfPath
+    delay 0.5
+    key code 36
+    delay 1
+    key code 36
+    delay 2
+    key code 36
+  end tell
+end tell
+return "sent"
+end run`;
+  await execFileAsync('/usr/bin/osascript', ['-e', script, cleanGroup, target], { timeout: 20_000 });
+}
 function createWindow() {
   mainWindow = new BrowserWindow({ width: 1440, height: 920, minWidth: 1080, minHeight: 700, backgroundColor: '#f5f7f3', webPreferences: { preload: join(__dirname, '../preload/preload.js'), contextIsolation: true, nodeIntegration: false, sandbox: true } });
   mainWindow.webContents.setWindowOpenHandler(() => ({ action: 'deny' }));
@@ -116,6 +157,11 @@ app.whenReady().then(() => {
     catch (error) { return { ok: false, message: error instanceof Error ? error.message : 'API ချိတ်ဆက်မှု မအောင်မြင်ပါ။' }; }
   });
   ipcMain.handle('api-football:fixtures-date', async (e, date: string) => { trusted(e); return apiFootball(`/fixtures?date=${encodeURIComponent(date)}&timezone=Asia%2FYangon`); });
+  ipcMain.handle('viber:send-file', async (e, groupName: string, filePath: string) => {
+    trusted(e);
+    try { await sendFileToViber(groupName, filePath); return { ok: true, message: 'PDF ကို Viber group သို့ ပို့ပြီးပါပြီ။' }; }
+    catch (error) { return { ok: false, message: error instanceof Error ? error.message : 'Viber သို့ PDF မပို့နိုင်ပါ။' }; }
+  });
   createWindow(); app.on('activate', () => { if (BrowserWindow.getAllWindows().length === 0) createWindow(); });
 });
 app.on('window-all-closed', () => { if (process.platform !== 'darwin') app.quit(); });

@@ -67,6 +67,15 @@ export interface Store {
       autoExportPdf: boolean;
       exportedReports: string[];
     };
+    viberDelivery: {
+      groupName: string;
+      autoSend: boolean;
+      sentReports: string[];
+      pendingReports: string[];
+      lastStatus: 'idle' | 'sent' | 'failed';
+      lastMessage: string;
+      lastSentAt?: string;
+    };
   };
 }
 export interface Settlement {
@@ -92,5 +101,8 @@ export interface DesktopApi {
     saveKey: (key: string) => Promise<boolean>;
     test: () => Promise<{ ok: boolean; message: string }>;
     fixturesByDate: (date: string) => Promise<ApiFixture[]>;
+  };
+  viber: {
+    sendFile: (groupName: string, filePath: string) => Promise<{ ok: boolean; message: string }>;
   };
 }
