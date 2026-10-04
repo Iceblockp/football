@@ -103,6 +103,7 @@ export interface DesktopApi {
     fixturesByDate: (date: string) => Promise<ApiFixture[]>;
   };
   viber: {
+    selectGroup: (groupName: string) => Promise<{ ok: boolean; message: string }>;
     sendFile: (groupName: string, filePath: string) => Promise<{ ok: boolean; message: string }>;
   };
 }

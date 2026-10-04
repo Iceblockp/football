@@ -16,6 +16,7 @@ const api: DesktopApi = {
     fixturesByDate: (date) => ipcRenderer.invoke('api-football:fixtures-date', date),
   },
   viber: {
+    selectGroup: (groupName) => ipcRenderer.invoke('viber:select-group', groupName),
     sendFile: (groupName, filePath) => ipcRenderer.invoke('viber:send-file', groupName, filePath),
   },
 };

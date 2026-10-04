@@ -85,6 +85,79 @@ async function renderPdf(target: string, html: string) {
     await writeFile(target, pdf);
   } finally { report.destroy(); }
 }
+const viberGroupSearchScript = `on run argv
+set groupName to item 1 of argv
+tell application id "com.viber.osx" to activate
+delay 1
+tell application "System Events"
+  tell process "Viber"
+    set frontmost to true
+    key code 53
+    delay 0.3
+    try
+      set searchField to first text field of window 1 whose description is "Search..."
+    on error
+      error "Viber conversation search field ကို မတွေ့ပါ။"
+    end try
+    -- Viber exposes AXRaise (not AXPress) for its Qt search control. Raising the
+    -- element is the same accessibility action a native element click uses.
+    perform action "AXRaise" of searchField
+    delay 0.3
+    keystroke "a" using {command down}
+    key code 51
+    -- A real paste event is required: directly setting Viber's AX value changes
+    -- the accessibility tree but does not update the QML search results.
+    set the clipboard to groupName
+    keystroke "v" using {command down}
+    delay 0.5
+    if value of searchField is not groupName then
+      -- If Viber left focus in another field, undo only our paste and stop
+      -- before Return can open or send anything.
+      keystroke "z" using {command down}
+      error "Viber search value မကိုက်ညီပါ။ PDF မပို့ပါ။"
+    end if
+    delay 1.5
+    -- Qt does not expose its search-result row to Accessibility. Return the
+    -- centre of the single first result so Node can issue a native CGEvent click.
+    set {searchX, searchY} to position of searchField
+    return ((searchX + 106) as text) & "," & ((searchY + 160) as text)
+  end tell
+end tell
+end run`;
+const viberNativeClickScript = `ObjC.import("CoreGraphics");
+function run(argv) {
+  const point = $.CGPointMake(Number(argv[0]), Number(argv[1]));
+  const down = $.CGEventCreateMouseEvent(null, $.kCGEventLeftMouseDown, point, $.kCGMouseButtonLeft);
+  const up = $.CGEventCreateMouseEvent(null, $.kCGEventLeftMouseUp, point, $.kCGMouseButtonLeft);
+  $.CGEventPost($.kCGHIDEventTap, down);
+  delay(0.05);
+  $.CGEventPost($.kCGHIDEventTap, up);
+}`;
+async function selectViberGroup(groupName: string) {
+  if (process.platform !== 'darwin') throw new Error('Viber Desktop automation ကို လောလောဆယ် macOS တွင်သာ အသုံးပြုနိုင်သည်။');
+  const cleanGroup = groupName.trim();
+  if (!cleanGroup) throw new Error('Viber group name ထည့်ပါ။');
+  const { stdout } = await execFileAsync('/usr/bin/osascript', ['-e', viberGroupSearchScript, cleanGroup], { timeout: 15_000 });
+  const match = stdout.trim().match(/^(-?\d+(?:\.\d+)?),(-?\d+(?:\.\d+)?)$/);
+  if (!match) throw new Error('Viber result နေရာကို မသတ်မှတ်နိုင်ပါ။ PDF မပို့ပါ။');
+  await execFileAsync('/usr/bin/osascript', ['-l', 'JavaScript', '-e', viberNativeClickScript, match[1], match[2]], { timeout: 5_000 });
+  const verifyScript = `on run argv
+delay 1
+tell application "System Events"
+  tell process "Viber"
+    try
+      set searchField to first text field of window 1 whose description is "Search..."
+    on error
+      error "Viber group ရွေးချယ်မှုကို အတည်မပြုနိုင်ပါ။ PDF မပို့ပါ။"
+    end try
+    if value of searchField is not item 1 of argv then error "Viber search value ပြောင်းသွားပါသည်။ PDF မပို့ပါ။"
+    if focused of searchField then error "Viber group ကို မရွေးနိုင်ပါ။ Group name အတိအကျနှင့် unique ဖြစ်ကြောင်း စစ်ပါ။"
+  end tell
+end tell
+return "selected"
+end run`;
+  await execFileAsync('/usr/bin/osascript', ['-e', verifyScript, cleanGroup], { timeout: 5_000 });
+}
 async function sendFileToViber(groupName: string, filePath: string) {
   if (process.platform !== 'darwin') throw new Error('Viber Desktop automation ကို လောလောဆယ် macOS တွင်သာ အသုံးပြုနိုင်သည်။');
   const cleanGroup = groupName.trim();
@@ -92,16 +165,12 @@ async function sendFileToViber(groupName: string, filePath: string) {
   const reportsFolder = resolve(join(app.getPath('documents'), 'Football Bet POS Reports'));
   const target = resolve(filePath);
   if (!target.startsWith(`${reportsFolder}/`) || !existsSync(target)) throw new Error('ပို့မည့် PDF ကို Football Bet POS Reports folder တွင် မတွေ့ပါ။');
+  await selectViberGroup(cleanGroup);
   const script = `on run argv
-set groupName to item 1 of argv
-set pdfPath to item 2 of argv
-tell application id "com.viber.osx" to activate
-delay 1
+set pdfPath to item 1 of argv
 tell application "System Events"
   tell process "Viber"
     set frontmost to true
-    key code 53
-    delay 0.5
     set {windowX, windowY} to position of window 1
     set {windowWidth, windowHeight} to size of window 1
     -- Viber keeps the attachment (+) button at the lower-left of the chat pane.
@@ -120,7 +189,7 @@ tell application "System Events"
 end tell
 return "sent"
 end run`;
-  await execFileAsync('/usr/bin/osascript', ['-e', script, cleanGroup, target], { timeout: 20_000 });
+  await execFileAsync('/usr/bin/osascript', ['-e', script, target], { timeout: 20_000 });
 }
 function createWindow() {
   mainWindow = new BrowserWindow({ width: 1440, height: 920, minWidth: 1080, minHeight: 700, backgroundColor: '#f5f7f3', webPreferences: { preload: join(__dirname, '../preload/preload.js'), contextIsolation: true, nodeIntegration: false, sandbox: true } });
@@ -157,6 +226,11 @@ app.whenReady().then(() => {
     catch (error) { return { ok: false, message: error instanceof Error ? error.message : 'API ချိတ်ဆက်မှု မအောင်မြင်ပါ။' }; }
   });
   ipcMain.handle('api-football:fixtures-date', async (e, date: string) => { trusted(e); return apiFootball(`/fixtures?date=${encodeURIComponent(date)}&timezone=Asia%2FYangon`); });
+  ipcMain.handle('viber:select-group', async (e, groupName: string) => {
+    trusted(e);
+    try { await selectViberGroup(groupName); return { ok: true, message: `Viber group “${groupName.trim()}” ကို ရှာပြီးရွေးထားပါပြီ။` }; }
+    catch (error) { return { ok: false, message: error instanceof Error ? error.message : 'Viber group ကို မရွေးနိုင်ပါ။' }; }
+  });
   ipcMain.handle('viber:send-file', async (e, groupName: string, filePath: string) => {
     trusted(e);
     try { await sendFileToViber(groupName, filePath); return { ok: true, message: 'PDF ကို Viber group သို့ ပို့ပြီးပါပြီ။' }; }
