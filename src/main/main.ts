@@ -154,7 +154,9 @@ tell application "System Events"
       error "Viber group ရွေးချယ်မှုကို အတည်မပြုနိုင်ပါ။ PDF မပို့ပါ။"
     end try
     if value of searchField is not item 1 of argv then error "Viber search value ပြောင်းသွားပါသည်။ PDF မပို့ပါ။"
-    if focused of searchField then error "Viber group ကို မရွေးနိုင်ပါ။ Group name အတိအကျနှင့် unique ဖြစ်ကြောင်း စစ်ပါ။"
+    -- When the requested group is already open, Viber selects its result but can
+    -- leave keyboard focus in Search. The exact search value plus the native
+    -- result-row click is therefore the reliable selection check here.
   end tell
 end tell
 return "selected"
@@ -178,7 +180,11 @@ tell application "System Events"
     set {windowWidth, windowHeight} to size of window 1
     -- Viber keeps the attachment (+) button at the lower-left of the chat pane.
     click at {windowX + 328, windowY + windowHeight - 28}
-    delay 1
+    repeat with attempt from 1 to 20
+      if exists sheet 1 of window 1 then exit repeat
+      delay 0.1
+    end repeat
+    if not (exists sheet 1 of window 1) then error "Viber file picker မပွင့်ပါ။ PDF မပို့နိုင်ပါ။"
     keystroke "g" using {command down, shift down}
     delay 0.5
     keystroke pdfPath
@@ -187,6 +193,7 @@ tell application "System Events"
     delay 1
     key code 36
     delay 2
+    if exists sheet 1 of window 1 then error "Viber file picker တွင် PDF ကို မရွေးနိုင်ပါ။"
     key code 36
   end tell
 end tell
