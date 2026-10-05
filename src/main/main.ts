@@ -43,7 +43,10 @@ async function loadStore(): Promise<Store> {
 }
 async function saveStore(store: Store) { await mkdir(app.getPath('userData'), { recursive: true }); await writeFile(dataPath(), JSON.stringify(store, null, 2), 'utf8'); }
 function syncAutomationRuntime(enabled: boolean) {
-  if (enabled && automationPowerBlocker === null) automationPowerBlocker = powerSaveBlocker.start('prevent-app-suspension');
+  // Viber delivery drives the desktop UI, so the display must remain awake as
+  // well as the Electron process. macOS restores its normal sleep policy when
+  // this blocker is stopped or the app quits.
+  if (enabled && automationPowerBlocker === null) automationPowerBlocker = powerSaveBlocker.start('prevent-display-sleep');
   if (!enabled && automationPowerBlocker !== null) { powerSaveBlocker.stop(automationPowerBlocker); automationPowerBlocker = null; }
   if (app.isPackaged) app.setLoginItemSettings({ openAtLogin: enabled });
 }
