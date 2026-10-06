@@ -4,6 +4,7 @@ export type BodyBaseSide = 'home' | 'away';
 export type Outcome = 'win' | 'loss' | 'refund';
 export type ViewMode = 'dai' | 'player';
 export type Bookmaker = 'viber' | 'messenger';
+export type AppearanceTheme = 'light' | 'dark';
 
 export interface BookmakerSettings {
   mode: 'direct' | 'summary';
@@ -58,6 +59,7 @@ export interface Store {
   bets: Bet[];
   settings: {
     view: ViewMode;
+    theme: AppearanceTheme;
     bookmakerSettings: Record<Bookmaker, BookmakerSettings>;
     automation: {
       enabled: boolean;

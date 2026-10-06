@@ -33,3 +33,95 @@ main>.card{min-height:0;overflow:auto}
 .automation-status.active .automation-dot{background:#2d8a47;box-shadow:0 0 0 4px #2d8a4720}
 .automation-status b{display:block;font-size:13px;font-variant-numeric:tabular-nums}
 .automation-status small{display:block;margin-top:2px;font-size:11px;color:inherit;opacity:.78}
+
+/* App appearance. PDF reports use their own light print stylesheet. */
+.theme-toggle{display:inline-grid;grid-template-columns:1fr 1fr;gap:5px;padding:4px;border-radius:10px;background:#e9efe4}
+.theme-toggle button{min-width:110px;margin:0;background:transparent;color:#506353;box-shadow:none}
+.theme-toggle button:hover{background:#dce7d5}
+.theme-toggle button.selected{background:#2d6b43;color:#fff;box-shadow:0 2px 8px #173c2530}
+:root[data-theme="dark"]{color-scheme:dark;color:#dbe8dd;background:#111814}
+:root[data-theme="dark"] body{background:#111814;color:#dbe8dd}
+:root[data-theme="dark"] header{border-color:#33453a}
+:root[data-theme="dark"] .card,
+:root[data-theme="dark"] .confirm-modal{background:#1a241e;border-color:#35473b;box-shadow:0 6px 22px #0005}
+:root[data-theme="dark"] h1,
+:root[data-theme="dark"] h2,
+:root[data-theme="dark"] h3{color:#edf6ef}
+:root[data-theme="dark"] .eyebrow{color:#9ac374}
+:root[data-theme="dark"] .muted,
+:root[data-theme="dark"] .day-picker small,
+:root[data-theme="dark"] td small,
+:root[data-theme="dark"] .match p,
+:root[data-theme="dark"] .match em{color:#9aaca0}
+:root[data-theme="dark"] label{color:#c8d7cb}
+:root[data-theme="dark"] input,
+:root[data-theme="dark"] select{background:#111a15;border-color:#4a5f50;color:#edf6ef}
+:root[data-theme="dark"] input::placeholder{color:#778a7d}
+:root[data-theme="dark"] button.secondary,
+:root[data-theme="dark"] .table-action{background:#304137;color:#d9e8dc}
+:root[data-theme="dark"] button.secondary:hover,
+:root[data-theme="dark"] .table-action:hover{background:#3b5143}
+:root[data-theme="dark"] .link,
+:root[data-theme="dark"] .rule-customize-btn{background:transparent;color:#82bd91}
+:root[data-theme="dark"] .danger{color:#f08d85}
+:root[data-theme="dark"] .rule-box,
+:root[data-theme="dark"] .selected-match-card,
+:root[data-theme="dark"] .quick-entry-box{background:#202d25;border-color:#415848}
+:root[data-theme="dark"] .rule-summary-badge,
+:root[data-theme="dark"] .team-list code,
+:root[data-theme="dark"] .quick-match-card code{background:#26372c;border-color:#435b49;color:#a9d3b2}
+:root[data-theme="dark"] .badge-pill,
+:root[data-theme="dark"] .rule-pill,
+:root[data-theme="dark"] .stake-chip,
+:root[data-theme="dark"] .quick-match-card{background:#151f19;border-color:#405447;color:#d5e4d8}
+:root[data-theme="dark"] .quick-entry-box code{background:#121b16;border-color:#405447;color:#acd4b5}
+:root[data-theme="dark"] .quick-entry-box b,
+:root[data-theme="dark"] .quick-match-card>b,
+:root[data-theme="dark"] .match-teams-display{color:#dce9df}
+:root[data-theme="dark"] .quick-entry-box small,
+:root[data-theme="dark"] .quick-match-card em{color:#93a69a}
+:root[data-theme="dark"] .team-options{background:#18231c;border-color:#4a6552;box-shadow:0 10px 24px #0008}
+:root[data-theme="dark"] .team-options button{background:#18231c;color:#dce9df}
+:root[data-theme="dark"] .team-options button:hover{background:#26372c}
+:root[data-theme="dark"] .team-options code{background:#2b3d31;color:#a9d3b2}
+:root[data-theme="dark"] .team-options span{color:#9aaca0}
+:root[data-theme="dark"] .team-list,
+:root[data-theme="dark"] .team-list>div,
+:root[data-theme="dark"] .match,
+:root[data-theme="dark"] .scroll-list-card>h2,
+:root[data-theme="dark"] .quick-candidates,
+:root[data-theme="dark"] .quick-match-reference,
+:root[data-theme="dark"] th,
+:root[data-theme="dark"] td{border-color:#33453a}
+:root[data-theme="dark"] th{background:#293a2f;color:#b9d29f}
+:root[data-theme="dark"] .table-wrap thead th{box-shadow:0 1px 0 #536959}
+:root[data-theme="dark"] .table-total-row td{background:#243228;border-color:#66806d}
+:root[data-theme="dark"] .summary-panel{background:#151e18;border-color:#405447}
+:root[data-theme="dark"] .summary-panel>b{background:#293a2f;color:#d8e8da}
+:root[data-theme="dark"] .summary-panel td:first-child{color:#a9bcad}
+:root[data-theme="dark"] .totals span{background:#25332a}
+:root[data-theme="dark"] .automation-status{background:#202a23;border-color:#3b4c40;color:#aebdb1}
+:root[data-theme="dark"] .automation-status.active{background:#193321;border-color:#416b4b;color:#a8dcb2}
+:root[data-theme="dark"] .selection-buttons .select-btn{background:#151f19;border-color:#43574a;color:#dbe8dd}
+:root[data-theme="dark"] .selection-buttons .select-btn:hover{background:#233229;border-color:#63a374}
+:root[data-theme="dark"] .selection-buttons .select-btn.selected{background:#2d6b43;border-color:#4b9462;color:#fff}
+:root[data-theme="dark"] .rule-pill:hover,
+:root[data-theme="dark"] .stake-chip:hover{background:#293b30;border-color:#5c9b6d}
+:root[data-theme="dark"] .rule-pill.selected{background:#29623e;border-color:#4b9462;color:#fff}
+:root[data-theme="dark"] .rule-pill.closed{background:#352523;border-color:#754943;color:#f0a39d}
+:root[data-theme="dark"] .team-warning,
+:root[data-theme="dark"] .quick-insert-note{background:#3a301d;border-color:#80602a;color:#f0ca84!important}
+:root[data-theme="dark"] .late-entry-box{background:#352321;border-color:#6c403c}
+:root[data-theme="dark"] .late-entry-title{color:#f19a93}
+:root[data-theme="dark"] .edit-badge{background:#403619;color:#f3d58b}
+:root[data-theme="dark"] .stake-chip.clear,
+:root[data-theme="dark"] .table-action.delete{background:#3a2422;color:#f19a93;border-color:#70413d}
+:root[data-theme="dark"] .confirm-overlay{background:#050907bb}
+:root[data-theme="dark"] .confirm-modal p{color:#aebfb2}
+:root[data-theme="dark"] .theme-toggle{background:#101713;border:1px solid #33453a}
+:root[data-theme="dark"] .theme-toggle button{color:#aebfb2}
+:root[data-theme="dark"] .theme-toggle button:hover{background:#27362c}
+:root[data-theme="dark"] .theme-toggle button.selected{background:#3f8054;color:#fff}
+:root[data-theme="dark"] ::-webkit-scrollbar{width:11px;height:11px}
+:root[data-theme="dark"] ::-webkit-scrollbar-track{background:#121a15}
+:root[data-theme="dark"] ::-webkit-scrollbar-thumb{background:#405247;border:2px solid #121a15;border-radius:8px}

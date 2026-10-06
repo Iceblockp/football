@@ -10,7 +10,7 @@ const defaultViberSettings = (): BookmakerSettings => ({ mode: 'direct', playerW
 const defaultMessengerSettings = (): BookmakerSettings => ({ mode: 'summary', playerWinDeduction: 0, playerLossRebate: 0, winTaxRate: 5, turnoverCommissionRate: 2 });
 const defaultAutomation = () => ({ enabled: false, pollMinutes: 10, windowStart: '00:00', windowEnd: '06:00', autoExportPdf: true, exportedReports: [] as string[] });
 const defaultViberDelivery = () => ({ groupName: '', autoSend: false, sentReports: [] as string[], pendingReports: [] as string[], lastStatus: 'idle' as const, lastMessage: '' });
-const emptyStore = (): Store => ({ teams: [], matches: [], bets: [], settings: { view: 'dai', bookmakerSettings: { viber: defaultViberSettings(), messenger: defaultMessengerSettings() }, automation: defaultAutomation(), viberDelivery: defaultViberDelivery() } });
+const emptyStore = (): Store => ({ teams: [], matches: [], bets: [], settings: { view: 'dai', theme: 'light', bookmakerSettings: { viber: defaultViberSettings(), messenger: defaultMessengerSettings() }, automation: defaultAutomation(), viberDelivery: defaultViberDelivery() } });
 const execFileAsync = promisify(execFile);
 let mainWindow: BrowserWindow | null = null;
 let automationPowerBlocker: number | null = null;
@@ -37,7 +37,7 @@ async function loadStore(): Promise<Store> {
       teams: Array.isArray(raw.teams) ? raw.teams : [],
       matches: Array.isArray(raw.matches) ? raw.matches.map(match => ({ ...match, bookmaker: match.bookmaker ?? 'viber' })) : [],
       bets: Array.isArray(raw.bets) ? raw.bets.map(bet => ({ ...bet, bookmaker: bet.bookmaker ?? 'viber' })) : [],
-      settings: { view: legacySettings?.view ?? 'dai', bookmakerSettings: { viber, messenger }, automation: { ...defaultAutomation(), ...legacySettings?.automation }, viberDelivery: { ...defaultViberDelivery(), ...legacySettings?.viberDelivery } },
+      settings: { view: legacySettings?.view ?? 'dai', theme: legacySettings?.theme === 'dark' ? 'dark' : 'light', bookmakerSettings: { viber, messenger }, automation: { ...defaultAutomation(), ...legacySettings?.automation }, viberDelivery: { ...defaultViberDelivery(), ...legacySettings?.viberDelivery } },
     };
   } catch { return emptyStore(); }
 }
