@@ -32,12 +32,15 @@ npm run build
 npm run start
 ```
 
-## Windows installer via GitHub Actions
+## Desktop installers via GitHub Actions
 
 The workflow in `.github/workflows/build-windows.yml` builds an unsigned NSIS
-Windows installer. Push this project to GitHub, then either run **Build Windows
-installer** manually from the Actions tab or push a version tag such as `v0.1.0`.
-Download `Football-Bet-POS-Windows` from that workflow run's artifacts.
+Windows installer and an unsigned macOS DMG in parallel. Push this project to
+GitHub, then either run **Build desktop installers** manually from the Actions
+tab or push a version tag such as `v0.1.0`. Download
+`Football-Bet-POS-Windows` or `Football-Bet-POS-macOS` from that workflow run's
+artifacts. Because the DMG is not Apple-notarized, macOS may require the first
+launch to use **Control-click → Open**.
 
 ## Settlement configuration
 
