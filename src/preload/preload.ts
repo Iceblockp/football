@@ -19,5 +19,15 @@ const api: DesktopApi = {
     selectGroup: (groupName) => ipcRenderer.invoke('viber:select-group', groupName),
     sendFile: (groupName, filePath) => ipcRenderer.invoke('viber:send-file', groupName, filePath),
   },
+  teamVoice: {
+    save: (teamId, audio) => ipcRenderer.invoke('team-voice:save', teamId, audio),
+    load: (teamId) => ipcRenderer.invoke('team-voice:load', teamId),
+    remove: (teamId) => ipcRenderer.invoke('team-voice:remove', teamId),
+  },
+  commonVoice: {
+    save: (key, audio) => ipcRenderer.invoke('common-voice:save', key, audio),
+    load: (key) => ipcRenderer.invoke('common-voice:load', key),
+    remove: (key) => ipcRenderer.invoke('common-voice:remove', key),
+  },
 };
 contextBridge.exposeInMainWorld('footballPos', api);

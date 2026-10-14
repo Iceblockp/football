@@ -28,7 +28,10 @@
     "win": { "target": "nsis" },
     "mac": {
       "target": "dmg",
-      "category": "public.app-category.finance"
+      "category": "public.app-category.finance",
+      "extendInfo": {
+        "NSMicrophoneUsageDescription": "Record team names for bet voice confirmations."
+      }
     }
   }
 }

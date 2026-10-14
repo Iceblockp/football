@@ -1,21 +1,33 @@
 import { app, BrowserWindow, dialog, ipcMain, powerSaveBlocker, safeStorage } from 'electron';
 import { execFile } from 'node:child_process';
-import { mkdir, readFile, writeFile } from 'node:fs/promises';
+import { mkdir, readFile, rm, writeFile } from 'node:fs/promises';
 import { existsSync } from 'node:fs';
 import { join, resolve } from 'node:path';
 import { promisify } from 'node:util';
-import type { ApiFixture, BookmakerSettings, Store } from '../shared/models';
+import type { ApiFixture, BookmakerSettings, CommonVoiceKey, Store } from '../shared/models';
 
 const defaultViberSettings = (): BookmakerSettings => ({ mode: 'direct', playerWinDeduction: 3, playerLossRebate: 2, winTaxRate: 0, turnoverCommissionRate: 0 });
 const defaultMessengerSettings = (): BookmakerSettings => ({ mode: 'summary', playerWinDeduction: 0, playerLossRebate: 0, winTaxRate: 5, turnoverCommissionRate: 2 });
 const defaultAutomation = () => ({ enabled: false, pollMinutes: 10, windowStart: '00:00', windowEnd: '06:00', autoExportPdf: true, exportedReports: [] as string[] });
 const defaultViberDelivery = () => ({ groupName: '', autoSend: false, sentReports: [] as string[], pendingReports: [] as string[], lastStatus: 'idle' as const, lastMessage: '' });
-const emptyStore = (): Store => ({ teams: [], matches: [], bets: [], settings: { view: 'dai', theme: 'light', bookmakerSettings: { viber: defaultViberSettings(), messenger: defaultMessengerSettings() }, automation: defaultAutomation(), viberDelivery: defaultViberDelivery() } });
+const defaultVoiceConfirmation = () => ({ enabled: true, rate: 1.35, commonClips: [] as CommonVoiceKey[] });
+const emptyStore = (): Store => ({ teams: [], matches: [], bets: [], settings: { view: 'dai', theme: 'light', voiceConfirmation: defaultVoiceConfirmation(), bookmakerSettings: { viber: defaultViberSettings(), messenger: defaultMessengerSettings() }, automation: defaultAutomation(), viberDelivery: defaultViberDelivery() } });
 const execFileAsync = promisify(execFile);
 let mainWindow: BrowserWindow | null = null;
 let automationPowerBlocker: number | null = null;
 const dataPath = () => join(app.getPath('userData'), 'football-pos.json');
 const apiKeyPath = () => join(app.getPath('userData'), 'api-football-key.bin');
+const teamVoiceFolder = () => join(app.getPath('userData'), 'team-voice');
+const commonVoiceFolder = () => join(app.getPath('userData'), 'common-voice');
+const commonVoiceKeys = new Set<CommonVoiceKey>(['body', 'over', 'down', '0', '1', '2', '3', '4', '5', '6', '7', '8', '9', 'k', 'w', 'l', 'm']);
+function teamVoicePath(teamId: string) {
+  if (!/^[a-zA-Z0-9-]+$/.test(teamId)) throw new Error('Invalid team id');
+  return join(teamVoiceFolder(), `${teamId}.webm`);
+}
+function commonVoicePath(key: CommonVoiceKey) {
+  if (!commonVoiceKeys.has(key)) throw new Error('Invalid common voice key');
+  return join(commonVoiceFolder(), `${key}.webm`);
+}
 function trusted(event: Electron.IpcMainInvokeEvent) {
   const url = event.senderFrame?.url || '';
   if ((process.env.VITE_DEV_SERVER_URL && url.startsWith(process.env.VITE_DEV_SERVER_URL)) || (!process.env.VITE_DEV_SERVER_URL && url.startsWith('file:'))) return;
@@ -37,7 +49,7 @@ async function loadStore(): Promise<Store> {
       teams: Array.isArray(raw.teams) ? raw.teams : [],
       matches: Array.isArray(raw.matches) ? raw.matches.map(match => ({ ...match, bookmaker: match.bookmaker ?? 'viber' })) : [],
       bets: Array.isArray(raw.bets) ? raw.bets.map(bet => ({ ...bet, bookmaker: bet.bookmaker ?? 'viber' })) : [],
-      settings: { view: legacySettings?.view ?? 'dai', theme: legacySettings?.theme === 'dark' ? 'dark' : 'light', bookmakerSettings: { viber, messenger }, automation: { ...defaultAutomation(), ...legacySettings?.automation }, viberDelivery: { ...defaultViberDelivery(), ...legacySettings?.viberDelivery } },
+      settings: { view: legacySettings?.view ?? 'dai', theme: legacySettings?.theme === 'dark' ? 'dark' : 'light', voiceConfirmation: { ...defaultVoiceConfirmation(), ...legacySettings?.voiceConfirmation }, bookmakerSettings: { viber, messenger }, automation: { ...defaultAutomation(), ...legacySettings?.automation }, viberDelivery: { ...defaultViberDelivery(), ...legacySettings?.viberDelivery } },
     };
   } catch { return emptyStore(); }
 }
@@ -211,6 +223,44 @@ function csvCell(v: string) { return `"${v.replaceAll('"', '""')}"`; }
 app.whenReady().then(() => {
   ipcMain.handle('data:load', async (e) => { trusted(e); const store = await loadStore(); syncAutomationRuntime(store.settings.automation.enabled); return store; });
   ipcMain.handle('data:save', async (e, store: Store) => { trusted(e); syncAutomationRuntime(store.settings.automation.enabled); await saveStore(store); });
+  ipcMain.handle('team-voice:save', async (e, teamId: string, audio: Uint8Array) => {
+    trusted(e);
+    const bytes = Buffer.from(audio);
+    if (!bytes.length) throw new Error('အသံဖိုင် အလွတ်ဖြစ်နေပါသည်။');
+    if (bytes.length > 2 * 1024 * 1024) throw new Error('အသံဖိုင်သည် 2 MB ထက်ကျော်နေပါသည်။');
+    await mkdir(teamVoiceFolder(), { recursive: true });
+    await writeFile(teamVoicePath(teamId), bytes);
+    return true;
+  });
+  ipcMain.handle('team-voice:load', async (e, teamId: string) => {
+    trusted(e);
+    try { return new Uint8Array(await readFile(teamVoicePath(teamId))); }
+    catch { return null; }
+  });
+  ipcMain.handle('team-voice:remove', async (e, teamId: string) => {
+    trusted(e);
+    await rm(teamVoicePath(teamId), { force: true });
+    return true;
+  });
+  ipcMain.handle('common-voice:save', async (e, key: CommonVoiceKey, audio: Uint8Array) => {
+    trusted(e);
+    const bytes = Buffer.from(audio);
+    if (!bytes.length) throw new Error('အသံဖိုင် အလွတ်ဖြစ်နေပါသည်။');
+    if (bytes.length > 2 * 1024 * 1024) throw new Error('အသံဖိုင်သည် 2 MB ထက်ကျော်နေပါသည်။');
+    await mkdir(commonVoiceFolder(), { recursive: true });
+    await writeFile(commonVoicePath(key), bytes);
+    return true;
+  });
+  ipcMain.handle('common-voice:load', async (e, key: CommonVoiceKey) => {
+    trusted(e);
+    try { return new Uint8Array(await readFile(commonVoicePath(key))); }
+    catch { return null; }
+  });
+  ipcMain.handle('common-voice:remove', async (e, key: CommonVoiceKey) => {
+    trusted(e);
+    await rm(commonVoicePath(key), { force: true });
+    return true;
+  });
   ipcMain.handle('report:csv', async (e, rows: string[][]) => {
     trusted(e); const target = await dialog.showSaveDialog({ title: 'Export Excel CSV', defaultPath: 'football-settlement.csv', filters: [{ name: 'CSV', extensions: ['csv'] }] });
     if (target.canceled || !target.filePath) return false;

@@ -1,5 +1,5 @@
 import { useEffect, useMemo, useRef, useState } from 'react';
-import type { ApiFixture, Band, Bet, Bookmaker, BookmakerSettings, Market, Match, Outcome, Rule, Selection, Settlement, Store, Team, ViewMode } from '../shared/models';
+import type { ApiFixture, Band, Bet, Bookmaker, BookmakerSettings, CommonVoiceKey, Market, Match, Outcome, Rule, Selection, Settlement, Store, Team, ViewMode } from '../shared/models';
 import { BODY_ODDS_PRESETS, TOTAL_ODDS_PRESETS, formatBandSummary, parseMyanmarOdds } from '../shared/odds';
 
 const uid = () => crypto.randomUUID();
@@ -12,6 +12,11 @@ const myanmarClock = (date = new Date()) => new Intl.DateTimeFormat('en-GB', { t
 const inTimeWindow = (value: string, start: string, end: string) => start <= end ? value >= start && value <= end : value >= start || value <= end;
 const countdownLabel = (seconds: number) => `${String(Math.floor(seconds / 60)).padStart(2, '0')}:${String(seconds % 60).padStart(2, '0')}`;
 const finalApiStatuses = new Set(['FT', 'AET', 'PEN']);
+const commonVoiceOptions: { key: CommonVoiceKey; label: string }[] = [
+  { key: 'body', label: 'Body' }, { key: 'over', label: 'Over (Up)' }, { key: 'down', label: 'Down' },
+  ...'0123456789'.split('').map(key => ({ key: key as CommonVoiceKey, label: key })),
+  { key: 'k', label: 'K · 000' }, { key: 'w', label: 'W · 0000' }, { key: 'l', label: 'L · 00000' }, { key: 'm', label: 'M · 000000' },
+];
 const money = (n: number) => new Intl.NumberFormat('en-US', { maximumFractionDigits: 0 }).format(Math.abs(n));
 const percent = (n: number) => Math.max(0, Math.min(100, Number.isFinite(n) ? n : 0));
 const sortBets = (items: Bet[]) => [...items].sort((a, b) =>
@@ -280,16 +285,33 @@ export function App() {
   const [store, setStore] = useState<Store | null>(null); const [page, setPage] = useState<'matches' | 'ledger' | 'report' | 'settings'>('matches'); const [notice, setNotice] = useState(''); const [activeDate, setActiveDate] = useState(today());
   const [activeBookmaker, setActiveBookmaker] = useState<Bookmaker>('viber');
   const [matchForm, setMatchForm] = useState({ time: '19:00', nextDay: false, home: '', away: '', rules: [defaultRule('body'), defaultRule('total')] as Rule[] }); const [editingMatchId, setEditingMatchId] = useState<string | null>(null);
-  const [betForm, setBetForm] = useState({ matchId: '', ruleId: '', selection: 'home' as Selection, note: '', amount: '', lateReceivedAt: '', lateReason: '' }); const [editingBetId, setEditingBetId] = useState<string | null>(null); const [insertAfterBetId, setInsertAfterBetId] = useState<string | null>(null); const [matchSearch, setMatchSearch] = useState(''); const [matchListSearch, setMatchListSearch] = useState(''); const [quickEntry, setQuickEntry] = useState(''); const [quickCandidates, setQuickCandidates] = useState<{ request: QuickRequest; matches: Match[] } | null>(null); const [teamForm, setTeamForm] = useState({ name: '', code: '' }); const [teamSearch, setTeamSearch] = useState(''); const [editingTeamId, setEditingTeamId] = useState<string | null>(null); const [editingTeamCode, setEditingTeamCode] = useState(''); const [reportSortMode, setReportSortMode] = useState<'latest' | 'ledger'>('latest'); const [confirmation, setConfirmation] = useState<{ message: string; resolve: (confirmed: boolean) => void } | null>(null);
+  const [betForm, setBetForm] = useState({ matchId: '', ruleId: '', selection: 'home' as Selection, note: '', amount: '', lateReceivedAt: '', lateReason: '' }); const [editingBetId, setEditingBetId] = useState<string | null>(null); const [insertAfterBetId, setInsertAfterBetId] = useState<string | null>(null); const [matchSearch, setMatchSearch] = useState(''); const [matchListSearch, setMatchListSearch] = useState(''); const [quickEntry, setQuickEntry] = useState(''); const [quickCandidates, setQuickCandidates] = useState<{ request: QuickRequest; matches: Match[] } | null>(null); const [teamForm, setTeamForm] = useState({ name: '', code: '', voiceName: '' }); const [teamSearch, setTeamSearch] = useState(''); const [editingTeamId, setEditingTeamId] = useState<string | null>(null); const [editingTeamCode, setEditingTeamCode] = useState(''); const [editingTeamVoiceName, setEditingTeamVoiceName] = useState(''); const [recordingTeamId, setRecordingTeamId] = useState<string | null>(null); const [recordingCommonKey, setRecordingCommonKey] = useState<CommonVoiceKey | null>(null); const [voiceClipBusyId, setVoiceClipBusyId] = useState<string | null>(null); const [commonVoiceBusyKey, setCommonVoiceBusyKey] = useState<CommonVoiceKey | null>(null); const [reportSortMode, setReportSortMode] = useState<'latest' | 'ledger'>('latest'); const [confirmation, setConfirmation] = useState<{ message: string; resolve: (confirmed: boolean) => void } | null>(null);
   const [apiKeyInput, setApiKeyInput] = useState(''); const [apiKeyConfigured, setApiKeyConfigured] = useState(false); const [apiMessage, setApiMessage] = useState(''); const [automationBusy, setAutomationBusy] = useState(false); const [nextAutomationCheckAt, setNextAutomationCheckAt] = useState<number | null>(null); const [automationClock, setAutomationClock] = useState(Date.now()); const [viberSendBusy, setViberSendBusy] = useState(false);
   const [fixturePicker, setFixturePicker] = useState<{ match: Match; fixtures: ApiFixture[]; searchDate: string } | null>(null); const [fixtureFilter, setFixtureFilter] = useState(''); const [fixturePickerLoading, setFixturePickerLoading] = useState(false);
   const fixtureDateCache = useRef(new Map<string, ApiFixture[]>());
   const checkApiResultsRef = useRef<(manual?: boolean) => Promise<void>>(async () => undefined);
+  const mediaRecorderRef = useRef<MediaRecorder | null>(null);
+  const recordingStreamRef = useRef<MediaStream | null>(null);
+  const recordingChunksRef = useRef<Blob[]>([]);
+  const recordingTimeoutRef = useRef<number | null>(null);
+  const voiceRunRef = useRef(0);
+  const voiceAudioContextRef = useRef<AudioContext | null>(null);
+  const activeVoiceSourceRef = useRef<AudioBufferSourceNode | null>(null);
+  const activeVoiceAudioFinishRef = useRef<(() => void) | null>(null);
   useEffect(() => { void window.footballPos.data.load().then(setStore); }, []);
   useEffect(() => { void window.footballPos.apiFootball.hasKey().then(setApiKeyConfigured); }, []);
   useEffect(() => {
     document.documentElement.dataset.theme = store?.settings.theme ?? 'light';
   }, [store?.settings.theme]);
+  useEffect(() => () => {
+    if (recordingTimeoutRef.current !== null) window.clearTimeout(recordingTimeoutRef.current);
+    if (mediaRecorderRef.current?.state === 'recording') mediaRecorderRef.current.stop();
+    recordingStreamRef.current?.getTracks().forEach(track => track.stop());
+    window.speechSynthesis?.cancel();
+    try { activeVoiceSourceRef.current?.stop(); } catch { /* already stopped */ }
+    activeVoiceAudioFinishRef.current?.();
+    void voiceAudioContextRef.current?.close();
+  }, []);
   useEffect(() => {
     const rules = (store?.matches ?? []).flatMap(match => match.rules);
     document.querySelectorAll('option').forEach(option => {
@@ -302,7 +324,7 @@ export function App() {
   const filteredTeams = useMemo(() => {
     const query = teamSearch.trim().toLowerCase();
     if (!query) return teams;
-    return teams.filter(team => `${team.name} ${team.code}`.toLowerCase().includes(query));
+    return teams.filter(team => `${team.name} ${team.code} ${team.voiceName ?? ''}`.toLowerCase().includes(query));
   }, [teams, teamSearch]);
   const filteredDayMatches = useMemo(() => {
     if (!matchSearch.trim()) return dayMatches;
@@ -330,6 +352,147 @@ export function App() {
   const currentView = store?.settings.view ?? 'dai';
   const daySettlements = settlements.filter(x => x.bet.date === activeDate && x.bet.bookmaker === activeBookmaker); const reportSettlements = sortSettlements(daySettlements, reportSortMode); const displayedResults = daySettlements.map(settlement => viewResult(settlement, activeCommission, currentView)); const totalBetAmount = daySettlements.reduce((n, x) => n + x.bet.amount, 0); const grossWin = displayedResults.filter(result => result.gross > 0).reduce((n, result) => n + result.gross, 0); const grossLoss = displayedResults.filter(result => result.gross < 0).reduce((n, result) => n + result.gross, 0); const winCom = displayedResults.filter(result => result.gross > 0).reduce((n, result) => n + result.adjustment, 0); const loseCom = displayedResults.filter(result => result.gross < 0).reduce((n, result) => n + result.adjustment, 0); const netWin = grossWin + winCom; const netLoss = grossLoss + loseCom; const columnTotal = netWin + netLoss; const turnover = daySettlements.reduce((n, settlement) => n + Math.abs(settlement.signed), 0); const commissionRate = activeCommission.mode === 'summary' ? activeCommission.turnoverCommissionRate : 0; const commission = turnover * commissionRate / 100; const commissionEffect = currentView === 'player' ? commission : -commission; const total = columnTotal + commissionEffect; const reportTotals: ReportTotals = { betAmount: totalBetAmount, grossWin, grossLoss, winCom, loseCom, netWin, netLoss, columnTotal, commission, commissionEffect, total, commissionRate, commissionLabel: 'Turnover Com' };
   const flash = (message: string) => { setNotice(message); setTimeout(() => setNotice(''), 3500); };
+  const stopVoiceOutput = () => {
+    voiceRunRef.current += 1;
+    window.speechSynthesis?.cancel();
+    try { activeVoiceSourceRef.current?.stop(); } catch { /* already stopped */ }
+    activeVoiceAudioFinishRef.current?.();
+    activeVoiceAudioFinishRef.current = null;
+    activeVoiceSourceRef.current = null;
+  };
+  const speakPart = (text: string, run: number) => new Promise<void>(resolve => {
+    if (!text || run !== voiceRunRef.current || !('speechSynthesis' in window)) return resolve();
+    const utterance = new SpeechSynthesisUtterance(text);
+    utterance.rate = store?.settings.voiceConfirmation.rate ?? 1.35;
+    utterance.lang = 'en-US';
+    const englishVoice = window.speechSynthesis.getVoices().find(voice => voice.lang.toLowerCase().startsWith('en'));
+    if (englishVoice) utterance.voice = englishVoice;
+    utterance.onend = () => resolve();
+    utterance.onerror = () => resolve();
+    window.speechSynthesis.speak(utterance);
+  });
+  const playRecordedClip = async (load: () => Promise<Uint8Array | null>, run: number) => {
+    if (run !== voiceRunRef.current) return false;
+    try {
+      const bytes = await load();
+      if (!bytes?.length || run !== voiceRunRef.current) return false;
+      const encoded = new ArrayBuffer(bytes.byteLength);
+      new Uint8Array(encoded).set(bytes);
+      const context = voiceAudioContextRef.current ?? new AudioContext();
+      voiceAudioContextRef.current = context;
+      if (context.state === 'suspended') await context.resume();
+      const audio = await context.decodeAudioData(encoded);
+      if (run !== voiceRunRef.current) return false;
+
+      // Find speech in 10 ms windows and skip the quiet lead-in/tail. A small
+      // padding keeps consonants natural while removing the long recording gap.
+      const windowFrames = Math.max(32, Math.round(audio.sampleRate * 0.01));
+      const windows = Math.ceil(audio.length / windowFrames);
+      const levels = new Float32Array(windows);
+      let peak = 0;
+      for (let index = 0; index < windows; index += 1) {
+        const from = index * windowFrames;
+        const to = Math.min(audio.length, from + windowFrames);
+        let squares = 0;
+        let samples = 0;
+        for (let channel = 0; channel < audio.numberOfChannels; channel += 1) {
+          const data = audio.getChannelData(channel);
+          for (let frame = from; frame < to; frame += 1) { squares += data[frame] * data[frame]; samples += 1; }
+        }
+        levels[index] = samples ? Math.sqrt(squares / samples) : 0;
+        peak = Math.max(peak, levels[index]);
+      }
+      const threshold = Math.max(0.006, peak * 0.08);
+      let first = 0;
+      let last = windows - 1;
+      while (first < windows && levels[first] < threshold) first += 1;
+      while (last > first && levels[last] < threshold) last -= 1;
+      const startFrame = first >= windows ? 0 : Math.max(0, first * windowFrames - Math.round(audio.sampleRate * 0.03));
+      const endFrame = first >= windows ? audio.length : Math.min(audio.length, (last + 1) * windowFrames + Math.round(audio.sampleRate * 0.04));
+      const offset = startFrame / audio.sampleRate;
+      const duration = Math.max(0.05, (endFrame - startFrame) / audio.sampleRate);
+
+      await new Promise<void>(resolve => {
+        const source = context.createBufferSource();
+        let settled = false;
+        const finish = () => { if (!settled) { settled = true; resolve(); } };
+        source.buffer = audio;
+        source.playbackRate.value = store?.settings.voiceConfirmation.rate ?? 1.35;
+        source.connect(context.destination);
+        activeVoiceSourceRef.current = source;
+        activeVoiceAudioFinishRef.current = finish;
+        source.onended = finish;
+        source.start(0, offset, duration);
+      });
+      return true;
+    } catch {
+      return false;
+    } finally {
+      activeVoiceSourceRef.current = null;
+      activeVoiceAudioFinishRef.current = null;
+    }
+  };
+  const playRecordedTeamName = (team: Team, run: number) => team.hasVoiceClip
+    ? playRecordedClip(() => window.footballPos.teamVoice.load(team.id), run)
+    : Promise.resolve(false);
+  const playCommonVoice = async (key: CommonVoiceKey, fallback: string, run: number) => {
+    const hasClip = store?.settings.voiceConfirmation.commonClips.includes(key) ?? false;
+    if (hasClip && await playRecordedClip(() => window.footballPos.commonVoice.load(key), run)) return;
+    await speakPart(fallback, run);
+  };
+  const playTeamName = async (teamName: string, run: number) => {
+    const team = teams.find(item => item.name === teamName);
+    if (!team || run !== voiceRunRef.current) return false;
+    if (await playRecordedTeamName(team, run)) return true;
+    if (team.voiceName?.trim()) { await speakPart(team.voiceName.trim(), run); return true; }
+    return false;
+  };
+  const voiceGap = (run: number) => new Promise<void>(resolve => window.setTimeout(() => resolve(), run === voiceRunRef.current ? 80 : 0));
+  const shortVoiceGap = (run: number) => new Promise<void>(resolve => window.setTimeout(() => resolve(), run === voiceRunRef.current ? 45 : 0));
+  const amountVoiceParts = (amount: number): { digits: CommonVoiceKey[]; unit?: CommonVoiceKey } => {
+    const rounded = Math.round(Math.abs(amount));
+    const units: { key: CommonVoiceKey; value: number }[] = [{ key: 'm', value: 1_000_000 }, { key: 'l', value: 100_000 }, { key: 'w', value: 10_000 }, { key: 'k', value: 1_000 }];
+    const unit = units.find(item => rounded >= item.value && rounded % item.value === 0);
+    const value = unit ? rounded / unit.value : rounded;
+    return { digits: String(value).split('').filter(digit => /\d/.test(digit)) as CommonVoiceKey[], unit: unit?.key };
+  };
+  const playAmount = async (amount: number, run: number) => {
+    const parts = amountVoiceParts(amount);
+    for (const digit of parts.digits) {
+      await playCommonVoice(digit, digit, run);
+      if (run !== voiceRunRef.current) return;
+      await shortVoiceGap(run);
+    }
+    if (parts.unit) await playCommonVoice(parts.unit, parts.unit.toUpperCase(), run);
+  };
+  const testCommonVoice = async () => {
+    if (!store?.settings.voiceConfirmation.enabled) return;
+    stopVoiceOutput();
+    const run = voiceRunRef.current;
+    await playCommonVoice('body', 'Body', run);
+    await voiceGap(run);
+    await playAmount(250_000, run);
+  };
+  const speakBetConfirmation = async (match: Match, rule: Rule, selection: Selection, amount: number) => {
+    if (!store?.settings.voiceConfirmation.enabled) return;
+    stopVoiceOutput();
+    const run = voiceRunRef.current;
+    let saidTeam = false;
+    if (rule.market === 'body') saidTeam = await playTeamName(selection === 'home' ? match.home : match.away, run);
+    else {
+      const saidHome = await playTeamName(match.home, run);
+      if (saidHome) await voiceGap(run);
+      const saidAway = await playTeamName(match.away, run);
+      saidTeam = saidHome || saidAway;
+    }
+    if (run !== voiceRunRef.current) return;
+    if (saidTeam) await voiceGap(run);
+    const action: CommonVoiceKey = rule.market === 'body' ? 'body' : selection === 'up' ? 'over' : 'down';
+    await playCommonVoice(action, action === 'body' ? 'Body' : action === 'over' ? 'Over' : 'Down', run);
+    if (run !== voiceRunRef.current) return;
+    await voiceGap(run);
+    await playAmount(amount, run);
+  };
   const askConfirm = (message: string) => new Promise<boolean>(resolve => setConfirmation({ message, resolve }));
   const closeConfirm = (confirmed: boolean) => { confirmation?.resolve(confirmed); setConfirmation(null); };
   const updateBookmakerSettings = (next: Partial<BookmakerSettings>) => {
@@ -381,6 +544,7 @@ export function App() {
       ? bets.map(x => x.id === editingBetId ? updated : x)
       : [...bets.filter(bet => bet.date !== selectedMatch.date || bet.bookmaker !== activeBookmaker), ...reorderedDayBets, updated];
     await save({ ...store, bets: nextBets });
+    void speakBetConfirmation(selectedMatch, selectedRule, betForm.selection, Number(betForm.amount));
     resetBetForm();
     flash(isEditing ? 'လောင်းမှတ်တမ်း ပြင်ပြီးပါပြီ။' : lateEntry ? 'Late entry ကို rule အဟောင်းဖြင့် သိမ်းပြီးပါပြီ။' : 'လောင်းမှတ်တမ်း သိမ်းပြီးပါပြီ။');
   };
@@ -398,6 +562,7 @@ export function App() {
     const shifted = prior.map((item, index) => ({ ...item, sortOrder: index >= insertAt ? index + 1 : index }));
     const bet: Bet = { id: uid(), date: activeDate, bookmaker: activeBookmaker, matchId: match.id, ruleId: rule.id, selection, note: '', amount: request.amount, sortOrder: insertAt, ruleSnapshot: structuredClone(rule), placedAt: new Date().toISOString(), lateEntry: false, lateReason: '' };
     await save({ ...store, bets: [...bets.filter(item => item.date !== activeDate || item.bookmaker !== activeBookmaker), ...shifted, bet] });
+    void speakBetConfirmation(match, rule, selection, request.amount);
     setQuickEntry(''); setQuickCandidates(null); setInsertAfterBetId(null);
     const choice = market === 'body' ? (selection === 'home' ? match.home : match.away) : selection === 'up' ? 'Up' : 'Down';
     flash(`✓ ${match.home} vs ${match.away} · ${choice} · ${money(request.amount)} Ks သိမ်းပြီးပါပြီ။`);
@@ -410,30 +575,150 @@ export function App() {
     if (candidates.length > 1) { setQuickCandidates({ request: parsed, matches: candidates }); return; }
     await saveQuickBet(parsed, candidates[0]);
   };
+  const stopTeamVoiceRecording = () => {
+    if (recordingTimeoutRef.current !== null) { window.clearTimeout(recordingTimeoutRef.current); recordingTimeoutRef.current = null; }
+    if (mediaRecorderRef.current?.state === 'recording') mediaRecorderRef.current.stop();
+  };
+  const startTeamVoiceRecording = async (team: Team) => {
+    if (!store || recordingTeamId || recordingCommonKey) return;
+    if (!navigator.mediaDevices?.getUserMedia || !('MediaRecorder' in window)) return flash('ဤစက်တွင် microphone recording ကို မသုံးနိုင်ပါ။');
+    try {
+      stopVoiceOutput();
+      const stream = await navigator.mediaDevices.getUserMedia({ audio: true });
+      const mimeType = MediaRecorder.isTypeSupported('audio/webm;codecs=opus') ? 'audio/webm;codecs=opus' : '';
+      const recorder = new MediaRecorder(stream, mimeType ? { mimeType } : undefined);
+      recordingStreamRef.current = stream;
+      mediaRecorderRef.current = recorder;
+      recordingChunksRef.current = [];
+      recorder.ondataavailable = event => { if (event.data.size) recordingChunksRef.current.push(event.data); };
+      recorder.onerror = () => flash('အသံဖမ်းနေစဉ် error ဖြစ်ပါသည်။');
+      recorder.onstop = async () => {
+        if (recordingTimeoutRef.current !== null) { window.clearTimeout(recordingTimeoutRef.current); recordingTimeoutRef.current = null; }
+        stream.getTracks().forEach(track => track.stop());
+        recordingStreamRef.current = null;
+        mediaRecorderRef.current = null;
+        setRecordingTeamId(null);
+        const blob = new Blob(recordingChunksRef.current, { type: recorder.mimeType || 'audio/webm' });
+        recordingChunksRef.current = [];
+        if (!blob.size) return flash('အသံမရပါ။ ထပ်မံဖမ်းကြည့်ပါ။');
+        setVoiceClipBusyId(team.id);
+        try {
+          await window.footballPos.teamVoice.save(team.id, new Uint8Array(await blob.arrayBuffer()));
+          const next = { ...store, teams: teams.map(item => item.id === team.id ? { ...item, hasVoiceClip: true } : item) };
+          await save(next);
+          flash(`${team.name} အသံကို သိမ်းပြီးပါပြီ။`);
+        } catch (error) {
+          flash(error instanceof Error ? error.message : 'အသံကို မသိမ်းနိုင်ပါ။');
+        } finally { setVoiceClipBusyId(null); }
+      };
+      recorder.start();
+      setRecordingTeamId(team.id);
+      recordingTimeoutRef.current = window.setTimeout(stopTeamVoiceRecording, 4000);
+    } catch (error) {
+      recordingStreamRef.current?.getTracks().forEach(track => track.stop());
+      recordingStreamRef.current = null;
+      mediaRecorderRef.current = null;
+      setRecordingTeamId(null);
+      flash(error instanceof Error ? `Microphone မဖွင့်နိုင်ပါ: ${error.message}` : 'Microphone permission လိုအပ်ပါသည်။');
+    }
+  };
+  const startCommonVoiceRecording = async (key: CommonVoiceKey, label: string) => {
+    if (!store || recordingTeamId || recordingCommonKey) return;
+    if (!navigator.mediaDevices?.getUserMedia || !('MediaRecorder' in window)) return flash('ဤစက်တွင် microphone recording ကို မသုံးနိုင်ပါ။');
+    try {
+      stopVoiceOutput();
+      const stream = await navigator.mediaDevices.getUserMedia({ audio: true });
+      const mimeType = MediaRecorder.isTypeSupported('audio/webm;codecs=opus') ? 'audio/webm;codecs=opus' : '';
+      const recorder = new MediaRecorder(stream, mimeType ? { mimeType } : undefined);
+      recordingStreamRef.current = stream;
+      mediaRecorderRef.current = recorder;
+      recordingChunksRef.current = [];
+      recorder.ondataavailable = event => { if (event.data.size) recordingChunksRef.current.push(event.data); };
+      recorder.onerror = () => flash('အသံဖမ်းနေစဉ် error ဖြစ်ပါသည်။');
+      recorder.onstop = async () => {
+        if (recordingTimeoutRef.current !== null) { window.clearTimeout(recordingTimeoutRef.current); recordingTimeoutRef.current = null; }
+        stream.getTracks().forEach(track => track.stop());
+        recordingStreamRef.current = null;
+        mediaRecorderRef.current = null;
+        setRecordingCommonKey(null);
+        const blob = new Blob(recordingChunksRef.current, { type: recorder.mimeType || 'audio/webm' });
+        recordingChunksRef.current = [];
+        if (!blob.size) return flash('အသံမရပါ။ ထပ်မံဖမ်းကြည့်ပါ။');
+        setCommonVoiceBusyKey(key);
+        try {
+          await window.footballPos.commonVoice.save(key, new Uint8Array(await blob.arrayBuffer()));
+          const clips = Array.from(new Set([...store.settings.voiceConfirmation.commonClips, key]));
+          await save({ ...store, settings: { ...store.settings, voiceConfirmation: { ...store.settings.voiceConfirmation, commonClips: clips } } });
+          flash(`${label} အသံကို သိမ်းပြီးပါပြီ။`);
+        } catch (error) {
+          flash(error instanceof Error ? error.message : 'အသံကို မသိမ်းနိုင်ပါ။');
+        } finally { setCommonVoiceBusyKey(null); }
+      };
+      recorder.start();
+      setRecordingCommonKey(key);
+      recordingTimeoutRef.current = window.setTimeout(stopTeamVoiceRecording, 3000);
+    } catch (error) {
+      recordingStreamRef.current?.getTracks().forEach(track => track.stop());
+      recordingStreamRef.current = null;
+      mediaRecorderRef.current = null;
+      setRecordingCommonKey(null);
+      flash(error instanceof Error ? `Microphone မဖွင့်နိုင်ပါ: ${error.message}` : 'Microphone permission လိုအပ်ပါသည်။');
+    }
+  };
+  const previewCommonVoice = async (key: CommonVoiceKey) => {
+    stopVoiceOutput();
+    const run = voiceRunRef.current;
+    if (!await playRecordedClip(() => window.footballPos.commonVoice.load(key), run)) flash('သိမ်းထားသောအသံကို မတွေ့ပါ။');
+  };
+  const removeCommonVoice = async (key: CommonVoiceKey, label: string) => {
+    if (!store || !await askConfirm(`${label} အတွက် ဖမ်းထားသောအသံကို ဖျက်မလား?\n\nဖျက်ပြီးလျှင် system voice ကို ပြန်သုံးမည်။`)) return;
+    setCommonVoiceBusyKey(key);
+    try {
+      await window.footballPos.commonVoice.remove(key);
+      await save({ ...store, settings: { ...store.settings, voiceConfirmation: { ...store.settings.voiceConfirmation, commonClips: store.settings.voiceConfirmation.commonClips.filter(item => item !== key) } } });
+      flash(`${label} အသံကို ဖျက်ပြီး system voice fallback ပြန်သုံးပါမည်။`);
+    } finally { setCommonVoiceBusyKey(null); }
+  };
+  const previewTeamVoice = async (team: Team) => {
+    stopVoiceOutput();
+    const run = voiceRunRef.current;
+    if (!await playRecordedTeamName(team, run)) flash('သိမ်းထားသောအသံကို မတွေ့ပါ။');
+  };
+  const removeTeamVoice = async (team: Team) => {
+    if (!store || !await askConfirm(`${team.name} အတွက် ဖမ်းထားသောအသံကို ဖျက်မလား?`)) return;
+    setVoiceClipBusyId(team.id);
+    try {
+      await window.footballPos.teamVoice.remove(team.id);
+      await save({ ...store, teams: teams.map(item => item.id === team.id ? { ...item, hasVoiceClip: false } : item) });
+      flash(`${team.name} အသံကို ဖျက်ပြီးပါပြီ။`);
+    } finally { setVoiceClipBusyId(null); }
+  };
   const addTeam = async (e: React.FormEvent) => {
     e.preventDefault();
     if (!store) return;
-    const name = teamForm.name.trim(); const code = teamForm.code.trim().toLowerCase().replace(/\s+/g, '');
+    const name = teamForm.name.trim(); const code = teamForm.code.trim().toLowerCase().replace(/\s+/g, ''); const voiceName = teamForm.voiceName.trim();
     if (!name || !code) return flash('Team name နှင့် short code ထည့်ပါ။');
     if (!/^[a-z0-9]+$/.test(code)) return flash('Short code ကို English letter နှင့် number များသာ သုံးပါ။');
     if (teams.some(team => team.code.toLowerCase() === code)) return flash(`“${code}” short code ကို အသုံးပြုပြီးသားဖြစ်သည်။`);
-    await save({ ...store, teams: [...teams, { id: uid(), name, code }] });
-    setTeamForm({ name: '', code: '' }); flash(`${name} (${code}) ကို Team list ထဲထည့်ပြီးပါပြီ။`);
+    await save({ ...store, teams: [...teams, { id: uid(), name, code, voiceName: voiceName || undefined }] });
+    setTeamForm({ name: '', code: '', voiceName: '' }); flash(`${name} (${code}) ကို Team list ထဲထည့်ပြီးပါပြီ။`);
   };
   const deleteTeam = async (team: Team) => {
     if (!store || !await askConfirm(`${team.name} (${team.code}) ကို Team list မှဖျက်မလား?\n\nရှိပြီးသား match နှင့် record များကို မဖျက်ပါ။`)) return;
+    if (team.hasVoiceClip) await window.footballPos.teamVoice.remove(team.id);
     await save({ ...store, teams: teams.filter(item => item.id !== team.id) });
     flash(`${team.name} ကို Team list မှဖျက်ပြီးပါပြီ။`);
   };
-  const startEditingTeamCode = (team: Team) => { setEditingTeamId(team.id); setEditingTeamCode(team.code); };
-  const cancelEditingTeamCode = () => { setEditingTeamId(null); setEditingTeamCode(''); };
+  const startEditingTeamCode = (team: Team) => { setEditingTeamId(team.id); setEditingTeamCode(team.code); setEditingTeamVoiceName(team.voiceName ?? ''); };
+  const cancelEditingTeamCode = () => { setEditingTeamId(null); setEditingTeamCode(''); setEditingTeamVoiceName(''); };
   const saveTeamCode = async (team: Team) => {
     if (!store) return;
     const code = editingTeamCode.trim().toLowerCase().replace(/\s+/g, '');
+    const voiceName = editingTeamVoiceName.trim();
     if (!code) return flash('Short code ထည့်ပါ။');
     if (!/^[a-z0-9]+$/.test(code)) return flash('Short code ကို English letter နှင့် number များသာ သုံးပါ။');
     if (teams.some(item => item.id !== team.id && item.code.toLowerCase() === code)) return flash(`“${code}” short code ကို အခြား Team တွင် အသုံးပြုပြီးသားဖြစ်သည်။`);
-    await save({ ...store, teams: teams.map(item => item.id === team.id ? { ...item, code } : item) });
+    await save({ ...store, teams: teams.map(item => item.id === team.id ? { ...item, code, voiceName: voiceName || undefined } : item) });
     cancelEditingTeamCode();
     flash(`${team.name} short code ကို “${code}” အဖြစ်ပြောင်းပြီးပါပြီ။`);
   };
@@ -1018,11 +1303,75 @@ export function App() {
     </section>
   )}
   {page === 'settings' && <section className="card appearance-card" style={{ marginBottom: '20px' }}><p className="eyebrow">APPEARANCE</p><h2>App Theme</h2><p className="muted">ညပိုင်းအသုံးပြုရာတွင် မျက်စိမစူးစေရန် Dark theme သို့ပြောင်းနိုင်သည်။ PDF report များသည် print ထုတ်ရန် Light ပုံစံအတိုင်းရှိမည်။</p><div className="theme-toggle" role="group" aria-label="App theme"><button type="button" className={store.settings.theme === 'light' ? 'selected' : ''} onClick={() => void save({ ...store, settings: { ...store.settings, theme: 'light' } })}>☀️ Light</button><button type="button" className={store.settings.theme === 'dark' ? 'selected' : ''} onClick={() => void save({ ...store, settings: { ...store.settings, theme: 'dark' } })}>🌙 Dark</button></div></section>}
+  {page === 'settings' && <section className="card voice-confirmation-card" style={{ marginBottom: '20px' }}>
+    <p className="eyebrow">VOICE CONFIRMATION</p>
+    <h2>လောင်းမှတ်တမ်း အသံဖြင့်အတည်ပြုရန်</h2>
+    <p className="muted">Team၊ Body/Over/Down၊ ဂဏန်းနှင့် unit အသံဖိုင်ရှိလျှင် recorded voice ကိုသုံးမည်။ မဖမ်းရသေးသောအသံတိုင်းကို system voice ဖြင့် အလိုအလျောက် fallback ပြောမည်။ အသံမြန်နှုန်းသည် recorded နှင့် system voice နှစ်မျိုးလုံးကို သက်ရောက်သည်။</p>
+    <label className="check" style={{ margin: '12px 0' }}><input type="checkbox" checked={store.settings.voiceConfirmation.enabled} onChange={e => { if (!e.target.checked) stopVoiceOutput(); void save({ ...store, settings: { ...store.settings, voiceConfirmation: { ...store.settings.voiceConfirmation, enabled: e.target.checked } } }); }}/> Record သိမ်းပြီးတိုင်း အသံထွက်မည်</label>
+    <div className="voice-controls"><label>အသံအားလုံး၏ မြန်နှုန်း<select value={store.settings.voiceConfirmation.rate} onChange={e => void save({ ...store, settings: { ...store.settings, voiceConfirmation: { ...store.settings.voiceConfirmation, rate: Number(e.target.value) } } })}><option value={1}>Normal</option><option value={1.2}>Fast</option><option value={1.35}>Faster</option><option value={1.5}>Very fast</option></select></label><button type="button" className="secondary" disabled={!store.settings.voiceConfirmation.enabled} onClick={() => void testCommonVoice()}>🔊 Body 250,000 စမ်းမည်</button></div>
+    <h3 className="common-voice-title">Common voice recordings</h3>
+    <p className="muted">အသံတစ်ခုချင်းကိုပြောပြီး ရပ်ပြီးသိမ်းမည်ကိုနှိပ်ပါ။ မနှိပ်လျှင် ၃ စက္ကန့်တွင် အလိုအလျောက်သိမ်းမည်။</p>
+    <div className="common-voice-grid">{commonVoiceOptions.map(option => {
+      const hasClip = store.settings.voiceConfirmation.commonClips.includes(option.key);
+      const recording = recordingCommonKey === option.key;
+      const anyRecording = Boolean(recordingCommonKey || recordingTeamId);
+      return <div className={`common-voice-item ${hasClip ? 'has-recording' : ''}`} key={option.key}>
+        <b>{option.label}</b><small>{hasClip ? '🎙 Recorded' : 'System voice fallback'}</small>
+        <div><button type="button" className={recording ? 'recording' : 'secondary'} disabled={(anyRecording && !recording) || commonVoiceBusyKey === option.key} onClick={() => recording ? stopTeamVoiceRecording() : void startCommonVoiceRecording(option.key, option.label)}>{recording ? '⏹ သိမ်း' : hasClip ? '🎙 ပြန်ဖမ်း' : '🎙 ဖမ်း'}</button>{hasClip && <button type="button" className="secondary" disabled={anyRecording || commonVoiceBusyKey === option.key} onClick={() => void previewCommonVoice(option.key)}>▶</button>}{hasClip && <button type="button" className="link danger" disabled={anyRecording || commonVoiceBusyKey === option.key} onClick={() => void removeCommonVoice(option.key, option.label)}>ဖျက်</button>}</div>
+      </div>;
+    })}</div>
+  </section>}
   {page === 'settings' && <section className="card" style={{ marginBottom: '20px' }}><p className="eyebrow">OVERNIGHT AUTOMATION</p><h2>API-Football Result Automation</h2><p className="muted">API key ကို encrypted storage တွင်သိမ်းသည်။ Project file နှင့် report များထဲ မထည့်ပါ။ Automation ဖွင့်ထားစဉ် Mac နှင့် display ကို app က အိပ်မသွားအောင် ထိန်းထားမည်။ Mac ကို charger ချိတ်၊ lid ဖွင့်ပြီး manually lock မလုပ်ပါနှင့်။</p><label>API Key<input type="password" autoComplete="off" value={apiKeyInput} onChange={e => setApiKeyInput(e.target.value)} placeholder={apiKeyConfigured ? 'Key သိမ်းပြီးသား — အသစ်ပြောင်းရန်သာ ထည့်ပါ' : 'API-Football key ထည့်ပါ'}/></label><button type="button" onClick={() => void saveApiKey()}>Key လုံခြုံစွာသိမ်းမည်</button><button type="button" className="secondary" onClick={() => void testApi()}>Connection စမ်းမည်</button>{apiMessage && <p className="muted">{apiMessage}</p>}<label className="check" style={{ margin: '14px 0 8px' }}><input type="checkbox" checked={store.settings.automation.enabled} onChange={e => void save({ ...store, settings: { ...store.settings, automation: { ...store.settings.automation, enabled: e.target.checked } } })}/> ညပိုင်း result အလိုအလျောက်စစ်မည် · Mac/display awake ထားမည်</label><div className="form-grid"><label>စစ်ဆေးချိန်မှ<input type="time" value={store.settings.automation.windowStart} onChange={e => void save({ ...store, settings: { ...store.settings, automation: { ...store.settings.automation, windowStart: e.target.value } } })}/></label><label>စစ်ဆေးချိန်အထိ<input type="time" value={store.settings.automation.windowEnd} onChange={e => void save({ ...store, settings: { ...store.settings, automation: { ...store.settings.automation, windowEnd: e.target.value } } })}/></label><label>မိနစ်ခြား<input type="number" min="5" max="60" value={store.settings.automation.pollMinutes} onChange={e => void save({ ...store, settings: { ...store.settings, automation: { ...store.settings.automation, pollMinutes: Math.max(5, Number(e.target.value) || 10) } } })}/></label></div><button type="button" disabled={automationBusy} onClick={() => void checkApiResults(true)}>{automationBusy ? 'စစ်ဆေးနေသည်…' : 'Result ယခုစစ်မည်'}</button><div className={`automation-status ${automationWindowActive ? 'active' : ''}`}><span className="automation-dot"/><div><b>{automationStatus}</b>{automationSettings?.enabled && <small>Mac/display awake · Myanmar time window {automationSettings.windowStart}–{automationSettings.windowEnd} · {automationSettings.pollMinutes} မိနစ်ခြား</small>}</div></div></section>}
   {page === 'settings' && <section className="card viber-delivery-card" style={{ marginBottom: '20px' }}><p className="eyebrow">VIBER AUTO DELIVERY</p><h2>PDF ကို Viber Group သို့ပို့ရန်</h2><p className="muted">ပို့မည့်အချိန်တွင် configured group name ကို Viber conversation search ဖြင့်ရှာပြီး ရွေးပါမည်။ Accounting date တစ်ရက်တွင် Viber နှင့် Messenger နှစ်ခုလုံး data ရှိပါက report နှစ်ခုလုံး ready ဖြစ်သည်အထိစောင့်ပြီး PDF နှစ်ဖိုင်ကို တစ်ဆက်တည်းပို့မည်။ Channel တစ်ခုတည်းသာ data ရှိပါက ထိုဖိုင်ကို ready ဖြစ်ချိန်တွင်ပို့မည်။</p><label>Viber Group Name<input value={store.settings.viberDelivery.groupName} onChange={e => void save({ ...store, settings: { ...store.settings, viberDelivery: { ...store.settings.viberDelivery, groupName: e.target.value } } })} placeholder="ဥပမာ ဒိုင် gp စစ် test"/></label><button type="button" className="secondary" disabled={viberSendBusy || !store.settings.viberDelivery.groupName.trim()} onClick={() => void testViberGroupSelection()}>{viberSendBusy ? 'Viber ကိုစစ်နေသည်…' : 'Configured Group ကို ရှာဖွင့် စမ်းမည်'}</button><label className="check" style={{ margin: '14px 0 8px' }}><input type="checkbox" checked={store.settings.viberDelivery.autoSend} disabled={!store.settings.viberDelivery.groupName.trim()} onChange={e => void save({ ...store, settings: { ...store.settings, viberDelivery: { ...store.settings.viberDelivery, autoSend: e.target.checked } } })}/> PDF ထွက်ပြီးလျှင် ဤ Viber group သို့ အလိုအလျောက်ပို့မည်</label><button type="button" disabled={viberSendBusy || !store.settings.viberDelivery.groupName.trim()} onClick={() => void sendCurrentReportToViber()}>{viberSendBusy ? 'Viber သို့ပို့နေသည်…' : `လက်ရှိ ${activeBookmaker === 'viber' ? 'Viber' : 'Messenger'} Report PDF ကို Test ပို့မည်`}</button>{store.settings.viberDelivery.lastMessage && <div className={`automation-status ${store.settings.viberDelivery.lastStatus === 'sent' ? 'active' : ''}`}><span className="automation-dot"/><div><b>{store.settings.viberDelivery.lastMessage}</b>{store.settings.viberDelivery.lastSentAt && <small>{new Date(store.settings.viberDelivery.lastSentAt).toLocaleString('en-GB', { timeZone: 'Asia/Yangon' })}</small>}</div></div>}<p className="muted">App နှင့် Viber ကိုဖွင့်ထားရမည်။ Group name ကို အခြား chat နှင့် မတူအောင် unique ဖြစ်စေပါ။ ရှာဖွေရွေးချယ်မှု မအောင်မြင်လျှင် PDF မပို့ဘဲ နောက် interval တွင် retry လုပ်သည်။ ပို့ပြီးသော date/channel ကို ထပ်မပို့ပါ။</p></section>}
   {page === 'settings' && <section className="card" style={{ marginBottom: '20px' }}><p className="eyebrow">CURRENT DATE DATA</p><h2>{activeDate} · {activeBookmaker === 'viber' ? 'Viber' : 'Messenger'}</h2><p className="muted">Match {dayMatches.length} ပွဲနှင့် လောင်းမှတ်တမ်း {dayBets.length} ခုကို အခြား channel သို့ ရွှေ့နိုင်သည်၊ သို့မဟုတ် မူရင်းကိုထားပြီး copy ကူးနိုင်သည်။</p><button type="button" onClick={() => void transferDayData('move')}>အခြား Channel သို့ ရွှေ့မည်</button><button type="button" className="secondary" onClick={() => void transferDayData('copy')}>မူရင်းထားပြီး Copy ကူးမည်</button></section>}
   {page === 'report' && <section className="card report"><div className="report-head"><div><p className="eyebrow">{activeBookmaker.toUpperCase()} DAILY SETTLEMENT · {store.settings.view === 'dai' ? 'ဒိုင် View' : 'Player View'}</p><h2>{activeDate} စာရင်း</h2></div><div><button className="secondary" onClick={async () => { if (await window.footballPos.data.exportCsv(csvRows())) flash('Excel CSV export ပြီးပါပြီ။'); }}>Excel CSV ထုတ်</button><button onClick={() => void exportPdf()}>PDF ထုတ်</button></div></div><LedgerTable rows={reportSettlements} settings={activeCommission} view={store.settings.view} totals={reportTotals} sortable sortMode={reportSortMode} onSortModeChange={setReportSortMode}/><SummaryPanel totals={reportTotals}/></section>}
-  {page === 'settings' && <section className="settings-page"><article className="card settings"><h2>{activeBookmaker === 'viber' ? 'Viber' : 'Messenger'} Report Settings</h2><p className="muted">ဒိုင်တစ်ခုချင်းစီ၏ commission rule ကို သီးခြားသိမ်းသည်။ View ပြောင်းခြင်းသည် record data ကို မပြောင်းပါ။</p><label>View<select value={store.settings.view} onChange={e => void save({ ...store, settings: { ...store.settings, view: e.target.value as ViewMode } })}><option value="dai">ဒိုင် View</option><option value="player">Player View</option></select></label>{activeCommission.mode === 'direct' ? <><label>Player နိုင်လျှင် ဖြတ်မည့်နှုန်း (%)<input type="number" min="0" max="100" value={activeCommission.playerWinDeduction} onChange={e => updateBookmakerSettings({ playerWinDeduction: percent(Number(e.target.value)) })}/></label><label>Player ရှုံးလျှင် ပြန်ပေးမည့်နှုန်း (%)<input type="number" min="0" max="100" value={activeCommission.playerLossRebate} onChange={e => updateBookmakerSettings({ playerLossRebate: percent(Number(e.target.value)) })}/></label><p className="muted">လက်ရှိ Viber rule: Player Win {activeCommission.playerWinDeduction}% · Player Lose {activeCommission.playerLossRebate}%</p></> : <><label>Gross WIN မှ ဖြတ်မည့်နှုန်း (%)<input type="number" min="0" max="100" value={activeCommission.winTaxRate} onChange={e => updateBookmakerSettings({ winTaxRate: percent(Number(e.target.value)) })}/></label><label>Gross WIN + LOSE ပေါ် Player ကိုပေးမည့် Commission (%)<input type="number" min="0" max="100" value={activeCommission.turnoverCommissionRate} onChange={e => updateBookmakerSettings({ turnoverCommissionRate: percent(Number(e.target.value)) })}/></label><p className="muted">Messenger rule: WIN ကို {activeCommission.winTaxRate}% ဖြတ်ပြီး စုစုပေါင်း settled turnover ပေါ် {activeCommission.turnoverCommissionRate}% ကို Player အား ပြန်ပေးသည်။</p></>}</article><article className="card team-card"><h2>Team list · Quick Code</h2><p className="muted">Quick Entry အတွက် အသင်းအမည်နှင့် မထပ်သော short code သတ်မှတ်ပါ။ ဥပမာ Chelsea → ch</p><form className="team-form" onSubmit={addTeam}><label>Team name<input value={teamForm.name} onChange={e => setTeamForm({ ...teamForm, name: e.target.value })} placeholder="Chelsea"/></label><label>Short code<input value={teamForm.code} onChange={e => setTeamForm({ ...teamForm, code: e.target.value })} placeholder="ch" maxLength={12}/></label><button type="submit">+ Team ထည့်မည်</button></form><div className="team-list-toolbar"><input value={teamSearch} onChange={e => setTeamSearch(e.target.value)} placeholder="🔍 Team name သို့ short code ရှာရန်"/><span>{filteredTeams.length} / {teams.length}</span></div>{teams.length === 0 ? <p className="muted">Team မရှိသေးပါ။</p> : filteredTeams.length === 0 ? <p className="muted">“{teamSearch}” နှင့်ကိုက်ညီသော Team မတွေ့ပါ။</p> : <div className="team-list">{filteredTeams.map(team => <div key={team.id}><b>{team.name}</b>{editingTeamId === team.id ? <div className="team-code-edit"><input autoFocus value={editingTeamCode} onChange={e => setEditingTeamCode(e.target.value)} onKeyDown={e => { if (e.key === 'Enter') { e.preventDefault(); void saveTeamCode(team); } if (e.key === 'Escape') cancelEditingTeamCode(); }} maxLength={12}/><button type="button" onClick={() => void saveTeamCode(team)}>သိမ်းမည်</button><button type="button" className="secondary" onClick={cancelEditingTeamCode}>မလုပ်တော့ပါ</button></div> : <><code>{team.code}</code><button type="button" className="link" onClick={() => startEditingTeamCode(team)}>Code ပြင်</button><button type="button" className="link danger" onClick={() => void deleteTeam(team)}>ဖျက်</button></>}</div>)}</div>}</article></section>}</div>{confirmation && <div className="confirm-overlay" role="dialog" aria-modal="true"><div className="confirm-modal"><h3>အတည်ပြုပါ</h3><p>{confirmation.message}</p><div><button type="button" className="secondary" onClick={() => closeConfirm(false)}>မလုပ်တော့ပါ</button><button type="button" autoFocus onClick={() => closeConfirm(true)}>အတည်ပြုမည်</button></div></div></div>}</main>;
+  {page === 'settings' && <section className="settings-page">
+    <article className="card settings">
+      <h2>{activeBookmaker === 'viber' ? 'Viber' : 'Messenger'} Report Settings</h2>
+      <p className="muted">ဒိုင်တစ်ခုချင်းစီ၏ commission rule ကို သီးခြားသိမ်းသည်။ View ပြောင်းခြင်းသည် record data ကို မပြောင်းပါ။</p>
+      <label>View<select value={store.settings.view} onChange={e => void save({ ...store, settings: { ...store.settings, view: e.target.value as ViewMode } })}><option value="dai">ဒိုင် View</option><option value="player">Player View</option></select></label>
+      {activeCommission.mode === 'direct' ? <>
+        <label>Player နိုင်လျှင် ဖြတ်မည့်နှုန်း (%)<input type="number" min="0" max="100" value={activeCommission.playerWinDeduction} onChange={e => updateBookmakerSettings({ playerWinDeduction: percent(Number(e.target.value)) })}/></label>
+        <label>Player ရှုံးလျှင် ပြန်ပေးမည့်နှုန်း (%)<input type="number" min="0" max="100" value={activeCommission.playerLossRebate} onChange={e => updateBookmakerSettings({ playerLossRebate: percent(Number(e.target.value)) })}/></label>
+        <p className="muted">လက်ရှိ Viber rule: Player Win {activeCommission.playerWinDeduction}% · Player Lose {activeCommission.playerLossRebate}%</p>
+      </> : <>
+        <label>Gross WIN မှ ဖြတ်မည့်နှုန်း (%)<input type="number" min="0" max="100" value={activeCommission.winTaxRate} onChange={e => updateBookmakerSettings({ winTaxRate: percent(Number(e.target.value)) })}/></label>
+        <label>Gross WIN + LOSE ပေါ် Player ကိုပေးမည့် Commission (%)<input type="number" min="0" max="100" value={activeCommission.turnoverCommissionRate} onChange={e => updateBookmakerSettings({ turnoverCommissionRate: percent(Number(e.target.value)) })}/></label>
+        <p className="muted">Messenger rule: WIN ကို {activeCommission.winTaxRate}% ဖြတ်ပြီး စုစုပေါင်း settled turnover ပေါ် {activeCommission.turnoverCommissionRate}% ကို Player အား ပြန်ပေးသည်။</p>
+      </>}
+    </article>
+    <article className="card team-card">
+      <h2>Team list · Quick Code · Voice</h2>
+      <p className="muted">မြန်မာအသင်းအမည်နှင့် Quick Entry short code သတ်မှတ်ပါ။ Team name အသံကိုဖမ်းနိုင်ပြီး English voice name သည် မထည့်လည်းရပါသည်။</p>
+      <form className="team-form" onSubmit={addTeam}>
+        <label>Team name<input value={teamForm.name} onChange={e => setTeamForm({ ...teamForm, name: e.target.value })} placeholder="မန်ချက်စတာ ယူနိုက်တက်"/></label>
+        <label>Short code<input value={teamForm.code} onChange={e => setTeamForm({ ...teamForm, code: e.target.value })} placeholder="mu" maxLength={12}/></label>
+        <label>English voice name (optional)<input value={teamForm.voiceName} onChange={e => setTeamForm({ ...teamForm, voiceName: e.target.value })} placeholder="Manchester United"/></label>
+        <button type="submit">+ Team ထည့်မည်</button>
+      </form>
+      <div className="team-list-toolbar"><input value={teamSearch} onChange={e => setTeamSearch(e.target.value)} placeholder="🔍 Team name, short code သို့ English name ရှာရန်"/><span>{filteredTeams.length} / {teams.length}</span></div>
+      {teams.length === 0 ? <p className="muted">Team မရှိသေးပါ။</p> : filteredTeams.length === 0 ? <p className="muted">“{teamSearch}” နှင့်ကိုက်ညီသော Team မတွေ့ပါ။</p> : <div className="team-list">{filteredTeams.map(team => <div key={team.id}>
+        <b>{team.name}</b>
+        {editingTeamId === team.id ? <div className="team-code-edit">
+          <input autoFocus value={editingTeamCode} onChange={e => setEditingTeamCode(e.target.value)} onKeyDown={e => { if (e.key === 'Enter') { e.preventDefault(); void saveTeamCode(team); } if (e.key === 'Escape') cancelEditingTeamCode(); }} placeholder="Short code" maxLength={12}/>
+          <input value={editingTeamVoiceName} onChange={e => setEditingTeamVoiceName(e.target.value)} onKeyDown={e => { if (e.key === 'Enter') { e.preventDefault(); void saveTeamCode(team); } if (e.key === 'Escape') cancelEditingTeamCode(); }} placeholder="English name (optional)"/>
+          <button type="button" onClick={() => void saveTeamCode(team)}>သိမ်းမည်</button>
+          <button type="button" className="secondary" onClick={cancelEditingTeamCode}>မလုပ်တော့ပါ</button>
+        </div> : <>
+          <span className="team-voice-name">{team.hasVoiceClip ? '🎙 အသံရှိ' : team.voiceName ? `🔊 ${team.voiceName}` : 'အသံမရှိ'}</span>
+          <code>{team.code}</code>
+          <button type="button" className="link" onClick={() => startEditingTeamCode(team)}>Code/Voice ပြင်</button>
+          <button type="button" className="link danger" onClick={() => void deleteTeam(team)}>ဖျက်</button>
+        </>}
+        <div className="team-voice-actions">
+          <button type="button" className={recordingTeamId === team.id ? 'recording' : 'secondary'} disabled={Boolean(recordingCommonKey) || Boolean(recordingTeamId && recordingTeamId !== team.id) || voiceClipBusyId === team.id} onClick={() => recordingTeamId === team.id ? stopTeamVoiceRecording() : void startTeamVoiceRecording(team)}>{recordingTeamId === team.id ? '⏹ ရပ်ပြီးသိမ်းမည်' : team.hasVoiceClip ? '🎙 ပြန်ဖမ်းမည်' : '🎙 အသံဖမ်းမည်'}</button>
+          {team.hasVoiceClip && <button type="button" className="secondary" disabled={voiceClipBusyId === team.id || Boolean(recordingTeamId)} onClick={() => void previewTeamVoice(team)}>▶ နားထောင်မည်</button>}
+          {team.hasVoiceClip && <button type="button" className="link danger" disabled={voiceClipBusyId === team.id || Boolean(recordingTeamId)} onClick={() => void removeTeamVoice(team)}>အသံဖျက်</button>}
+        </div>
+      </div>)}</div>}
+    </article>
+  </section>}
+  </div>{confirmation && <div className="confirm-overlay" role="dialog" aria-modal="true"><div className="confirm-modal"><h3>အတည်ပြုပါ</h3><p>{confirmation.message}</p><div><button type="button" className="secondary" onClick={() => closeConfirm(false)}>မလုပ်တော့ပါ</button><button type="button" autoFocus onClick={() => closeConfirm(true)}>အတည်ပြုမည်</button></div></div></div>}</main>;
 }
 function MatchCard({ match, onSave }: { match: Match; onSave: (m: Match, h: string, a: string, p: boolean) => void }) {
   const [h, setH] = useState(match.homeScore?.toString() ?? '');

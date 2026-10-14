@@ -5,6 +5,7 @@ export type Outcome = 'win' | 'loss' | 'refund';
 export type ViewMode = 'dai' | 'player';
 export type Bookmaker = 'viber' | 'messenger';
 export type AppearanceTheme = 'light' | 'dark';
+export type CommonVoiceKey = 'body' | 'over' | 'down' | '0' | '1' | '2' | '3' | '4' | '5' | '6' | '7' | '8' | '9' | 'k' | 'w' | 'l' | 'm';
 
 export interface BookmakerSettings {
   mode: 'direct' | 'summary';
@@ -18,7 +19,15 @@ export interface BookmakerSettings {
   turnoverCommissionRate: number;
 }
 
-export interface Team { id: string; name: string; code: string }
+export interface Team {
+  id: string;
+  name: string;
+  code: string;
+  /** English name spoken by the local voice confirmation. */
+  voiceName?: string;
+  /** Whether a locally recorded team-name clip exists for this team id. */
+  hasVoiceClip?: boolean;
+}
 
 export interface Band { outcome: Outcome; rate: number }
 export interface Rule {
@@ -60,6 +69,11 @@ export interface Store {
   settings: {
     view: ViewMode;
     theme: AppearanceTheme;
+    voiceConfirmation: {
+      enabled: boolean;
+      rate: number;
+      commonClips: CommonVoiceKey[];
+    };
     bookmakerSettings: Record<Bookmaker, BookmakerSettings>;
     automation: {
       enabled: boolean;
@@ -107,5 +121,15 @@ export interface DesktopApi {
   viber: {
     selectGroup: (groupName: string) => Promise<{ ok: boolean; message: string }>;
     sendFile: (groupName: string, filePath: string) => Promise<{ ok: boolean; message: string }>;
+  };
+  teamVoice: {
+    save: (teamId: string, audio: Uint8Array) => Promise<boolean>;
+    load: (teamId: string) => Promise<Uint8Array | null>;
+    remove: (teamId: string) => Promise<boolean>;
+  };
+  commonVoice: {
+    save: (key: CommonVoiceKey, audio: Uint8Array) => Promise<boolean>;
+    load: (key: CommonVoiceKey) => Promise<Uint8Array | null>;
+    remove: (key: CommonVoiceKey) => Promise<boolean>;
   };
 }
