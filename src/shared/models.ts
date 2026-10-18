@@ -27,6 +27,9 @@ export interface Team {
   voiceName?: string;
   /** Whether a locally recorded team-name clip exists for this team id. */
   hasVoiceClip?: boolean;
+  /** API-Football identity learned from a confirmed fixture link. */
+  apiTeamId?: number;
+  apiName?: string;
 }
 
 export interface Band { outcome: Outcome; rate: number }
@@ -102,6 +105,8 @@ export interface ApiFixture {
   kickoffAt: string;
   home: string;
   away: string;
+  homeId: number;
+  awayId: number;
   league: string;
   status: string;
   elapsed: number | null;

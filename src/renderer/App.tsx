@@ -29,6 +29,14 @@ const sortSettlements = (items: Settlement[], mode: 'latest' | 'ledger') => mode
   : items;
 type ViewResult = { gross: number; adjustment: number; final: number; grossLabel: string; adjustmentLabel: string; finalLabel: string };
 type ReportTotals = { betAmount: number; grossWin: number; grossLoss: number; winCom: number; loseCom: number; netWin: number; netLoss: number; columnTotal: number; commission: number; commissionEffect: number; total: number; commissionRate: number; commissionLabel: string };
+type BulkMatchRow = { nextDay: boolean; time: string; teams: [string, string]; bd?: string; ou?: string };
+type BulkPreview = { rows: BulkMatchRow[]; missingCodes: Record<string, string> };
+const normalizeApiName = (value: string) => value.toLowerCase().normalize('NFKD').replace(/[^a-z0-9]+/g, ' ').trim();
+const ruleFromCode = (market: Market, code: string): Rule => {
+  const parsed = parseMyanmarOdds(code);
+  if (!parsed) throw new Error(`Invalid ${market === 'body' ? 'BD' : 'O/U'} rule: ${code}`);
+  return { id: uid(), market, code, ...parsed, ...(market === 'body' ? { bodyBaseSide: 'home' as const } : {}), status: 'active', effectiveAt: new Date().toISOString(), provisional: false };
+};
 const viewResult = (settlement: Settlement, settings: BookmakerSettings, view: ViewMode): ViewResult => {
   if (settlement.label === 'Pending' || settlement.band.outcome === 'refund') return { gross: 0, adjustment: 0, final: 0, grossLabel: settlement.label, adjustmentLabel: '—', finalLabel: settlement.label };
   const playerGross = settlement.signed;
@@ -283,11 +291,13 @@ function TeamSelect({ label, value, teams, onChange }: { label: string; value: s
 }
 export function App() {
   const [store, setStore] = useState<Store | null>(null); const [page, setPage] = useState<'matches' | 'ledger' | 'report' | 'settings'>('matches'); const [notice, setNotice] = useState(''); const [activeDate, setActiveDate] = useState(today());
+  const [settingsTab, setSettingsTab] = useState<'general' | 'report' | 'matches' | 'voice' | 'automation'>('general');
   const [activeBookmaker, setActiveBookmaker] = useState<Bookmaker>('viber');
   const [matchForm, setMatchForm] = useState({ time: '19:00', nextDay: false, home: '', away: '', rules: [defaultRule('body'), defaultRule('total')] as Rule[] }); const [editingMatchId, setEditingMatchId] = useState<string | null>(null);
-  const [betForm, setBetForm] = useState({ matchId: '', ruleId: '', selection: 'home' as Selection, note: '', amount: '', lateReceivedAt: '', lateReason: '' }); const [editingBetId, setEditingBetId] = useState<string | null>(null); const [insertAfterBetId, setInsertAfterBetId] = useState<string | null>(null); const [matchSearch, setMatchSearch] = useState(''); const [matchListSearch, setMatchListSearch] = useState(''); const [quickEntry, setQuickEntry] = useState(''); const [quickCandidates, setQuickCandidates] = useState<{ request: QuickRequest; matches: Match[] } | null>(null); const [teamForm, setTeamForm] = useState({ name: '', code: '', voiceName: '' }); const [teamSearch, setTeamSearch] = useState(''); const [editingTeamId, setEditingTeamId] = useState<string | null>(null); const [editingTeamCode, setEditingTeamCode] = useState(''); const [editingTeamVoiceName, setEditingTeamVoiceName] = useState(''); const [recordingTeamId, setRecordingTeamId] = useState<string | null>(null); const [recordingCommonKey, setRecordingCommonKey] = useState<CommonVoiceKey | null>(null); const [voiceClipBusyId, setVoiceClipBusyId] = useState<string | null>(null); const [commonVoiceBusyKey, setCommonVoiceBusyKey] = useState<CommonVoiceKey | null>(null); const [reportSortMode, setReportSortMode] = useState<'latest' | 'ledger'>('latest'); const [confirmation, setConfirmation] = useState<{ message: string; resolve: (confirmed: boolean) => void } | null>(null);
+  const [betForm, setBetForm] = useState({ matchId: '', ruleId: '', selection: 'home' as Selection, note: '', amount: '', lateReceivedAt: '', lateReason: '' }); const [editingBetId, setEditingBetId] = useState<string | null>(null); const [insertAfterBetId, setInsertAfterBetId] = useState<string | null>(null); const [matchSearch, setMatchSearch] = useState(''); const [matchListSearch, setMatchListSearch] = useState(''); const [quickEntry, setQuickEntry] = useState(''); const [quickCandidates, setQuickCandidates] = useState<{ request: QuickRequest; matches: Match[] } | null>(null); const [teamForm, setTeamForm] = useState({ name: '', code: '', voiceName: '' }); const [teamSearch, setTeamSearch] = useState(''); const [editingTeamId, setEditingTeamId] = useState<string | null>(null); const [editingTeamCode, setEditingTeamCode] = useState(''); const [editingTeamVoiceName, setEditingTeamVoiceName] = useState(''); const [deletingAllTeams, setDeletingAllTeams] = useState(false); const [recordingTeamId, setRecordingTeamId] = useState<string | null>(null); const [recordingCommonKey, setRecordingCommonKey] = useState<CommonVoiceKey | null>(null); const [voiceClipBusyId, setVoiceClipBusyId] = useState<string | null>(null); const [commonVoiceBusyKey, setCommonVoiceBusyKey] = useState<CommonVoiceKey | null>(null); const [reportSortMode, setReportSortMode] = useState<'latest' | 'ledger'>('latest'); const [confirmation, setConfirmation] = useState<{ message: string; resolve: (confirmed: boolean) => void } | null>(null);
   const [apiKeyInput, setApiKeyInput] = useState(''); const [apiKeyConfigured, setApiKeyConfigured] = useState(false); const [apiMessage, setApiMessage] = useState(''); const [automationBusy, setAutomationBusy] = useState(false); const [nextAutomationCheckAt, setNextAutomationCheckAt] = useState<number | null>(null); const [automationClock, setAutomationClock] = useState(Date.now()); const [viberSendBusy, setViberSendBusy] = useState(false);
   const [fixturePicker, setFixturePicker] = useState<{ match: Match; fixtures: ApiFixture[]; searchDate: string } | null>(null); const [fixtureFilter, setFixtureFilter] = useState(''); const [fixturePickerLoading, setFixturePickerLoading] = useState(false);
+  const [bulkOpen, setBulkOpen] = useState(false); const [bulkJson, setBulkJson] = useState(''); const [bulkPreview, setBulkPreview] = useState<BulkPreview | null>(null); const [bulkError, setBulkError] = useState(''); const [bulkApiQueue, setBulkApiQueue] = useState<string[]>([]); const [bulkApiBusy, setBulkApiBusy] = useState(false);
   const fixtureDateCache = useRef(new Map<string, ApiFixture[]>());
   const checkApiResultsRef = useRef<(manual?: boolean) => Promise<void>>(async () => undefined);
   const mediaRecorderRef = useRef<MediaRecorder | null>(null);
@@ -324,7 +334,7 @@ export function App() {
   const filteredTeams = useMemo(() => {
     const query = teamSearch.trim().toLowerCase();
     if (!query) return teams;
-    return teams.filter(team => `${team.name} ${team.code} ${team.voiceName ?? ''}`.toLowerCase().includes(query));
+    return teams.filter(team => `${team.name} ${team.code} ${team.voiceName ?? ''} ${team.apiName ?? ''}`.toLowerCase().includes(query));
   }, [teams, teamSearch]);
   const filteredDayMatches = useMemo(() => {
     if (!matchSearch.trim()) return dayMatches;
@@ -473,12 +483,13 @@ export function App() {
     await voiceGap(run);
     await playAmount(250_000, run);
   };
-  const speakBetConfirmation = async (match: Match, rule: Rule, selection: Selection, amount: number) => {
+  const speakBetConfirmation = async (match: Match, rule: Rule, selection: Selection, amount: number, quickEntryTeam?: string) => {
     if (!store?.settings.voiceConfirmation.enabled) return;
     stopVoiceOutput();
     const run = voiceRunRef.current;
     let saidTeam = false;
     if (rule.market === 'body') saidTeam = await playTeamName(selection === 'home' ? match.home : match.away, run);
+    else if (quickEntryTeam) saidTeam = await playTeamName(quickEntryTeam, run);
     else {
       const saidHome = await playTeamName(match.home, run);
       if (saidHome) await voiceGap(run);
@@ -501,6 +512,58 @@ export function App() {
   };
   const resetMatchForm = () => { setEditingMatchId(null); setMatchForm({ time: '19:00', nextDay: false, home: '', away: '', rules: [defaultRule('body'), defaultRule('total')] }); };
   const addMatch = async (e: React.FormEvent) => { e.preventDefault(); if (!store || !matchForm.home.trim() || !matchForm.away.trim()) return flash('အသင်းနှစ်သင်းလုံး ထည့်ပါ။'); const previous = editingMatchId ? matches.find(x => x.id === editingMatchId) : undefined; const history = previous?.rules.filter(rule => rule.status === 'closed') ?? []; const provisionalIds = new Set(previous?.rules.filter(rule => rule.provisional).map(rule => rule.id) ?? []); const finalizedRules = previous ? matchForm.rules.map(rule => provisionalIds.has(rule.id) ? { ...rule, provisional: false } : rule) : matchForm.rules; const nextDayKickoff = matchForm.nextDay || matchForm.time < '06:00'; const updated: Match = { id: previous?.id || uid(), time: matchForm.time, rules: previous ? [...history, ...finalizedRules] : matchForm.rules, date: activeDate, bookmaker: previous?.bookmaker ?? activeBookmaker, home: matchForm.home.trim(), away: matchForm.away.trim(), homeScore: previous?.homeScore ?? null, awayScore: previous?.awayScore ?? null, postponed: previous?.postponed ?? false, kickoffAt: kickoffIso(activeDate, matchForm.time, nextDayKickoff), apiFixtureId: previous?.apiFixtureId, apiHome: previous?.apiHome, apiAway: previous?.apiAway, apiSidesReversed: previous?.apiSidesReversed, apiStatus: previous?.apiStatus, apiLeague: previous?.apiLeague, resultSource: previous?.resultSource, resultCheckedAt: previous?.resultCheckedAt }; const provisionalBets = previous ? bets.filter(bet => bet.matchId === previous.id && provisionalIds.has(bet.ruleId)) : []; if (provisionalBets.length && !await askConfirm(`Temporary rule ဖြင့် ထိုးထားသော record ${provisionalBets.length} ခုကို ယခု actual rule ဖြင့် update လုပ်မလား?`)) return; const refreshedBets = previous ? bets.map(bet => { const newRule = updated.rules.find(rule => rule.id === bet.ruleId); return newRule && provisionalIds.has(bet.ruleId) ? { ...bet, ruleSnapshot: structuredClone(newRule) } : bet; }) : bets; await save({ ...store, matches: previous ? matches.map(x => x.id === previous.id ? updated : x) : [...matches, updated], bets: refreshedBets }); resetMatchForm(); flash(previous && provisionalBets.length ? `Actual rule ကိုအတည်ပြုပြီး record ${provisionalBets.length} ခုကို update လုပ်ပြီးပါပြီ။` : previous ? 'Active rule များကို ပြင်ပြီးပါပြီ။ ပိတ်ထားသော rule history မပြောင်းပါ။' : nextDayKickoff ? `Match ကို ${nextDate(activeDate)} မနက်အစောပိုင်း kickoff အဖြစ် သိမ်းပြီးပါပြီ။` : 'Match နှင့် temporary default rule များကို သိမ်းပြီးပါပြီ။'); };
+  const parseBulkMatches = () => {
+    setBulkError(''); setBulkPreview(null);
+    try {
+      const input: unknown = JSON.parse(bulkJson);
+      if (!Array.isArray(input) || input.length === 0) throw new Error('JSON သည် match object များပါသော array ဖြစ်ရမည်။');
+      if (input.length > 100) throw new Error('တစ်ကြိမ်လျှင် match 100 ပွဲအထိသာ ထည့်နိုင်ပါသည်။');
+      const rows: BulkMatchRow[] = input.map((value, index) => {
+        if (!value || typeof value !== 'object' || Array.isArray(value)) throw new Error(`Row ${index + 1}: object မဟုတ်ပါ။`);
+        const item = value as Record<string, unknown>;
+        if (typeof item.nextDay !== 'boolean') throw new Error(`Row ${index + 1}: nextDay ကို true သို့မဟုတ် false ထည့်ပါ။`);
+        if (typeof item.time !== 'string' || !/^([01]\d|2[0-3]):[0-5]\d$/.test(item.time)) throw new Error(`Row ${index + 1}: time ကို HH:mm ဖြင့်ထည့်ပါ။`);
+        if (!Array.isArray(item.teams) || item.teams.length !== 2 || item.teams.some(team => typeof team !== 'string' || !team.trim())) throw new Error(`Row ${index + 1}: teams တွင် အသင်းနှစ်သင်း အတိအကျလိုအပ်ပါသည်။`);
+        const left = String(item.teams[0]).trim(); const right = String(item.teams[1]).trim();
+        if (left === right) throw new Error(`Row ${index + 1}: ဘယ်/ညာအသင်း တူနေပါသည်။`);
+        const bd = typeof item.bd === 'string' && item.bd.trim() ? item.bd.trim().toUpperCase() : undefined;
+        const ou = typeof item.ou === 'string' && item.ou.trim() ? item.ou.trim().toUpperCase() : undefined;
+        if (!bd && !ou) throw new Error(`Row ${index + 1}: bd သို့မဟုတ် ou အနည်းဆုံးတစ်ခု လိုအပ်ပါသည်။`);
+        if (bd && !parseMyanmarOdds(bd)) throw new Error(`Row ${index + 1}: BD rule “${bd}” ကို နားမလည်ပါ။`);
+        if (ou && !parseMyanmarOdds(ou)) throw new Error(`Row ${index + 1}: O/U rule “${ou}” ကို နားမလည်ပါ။`);
+        return { nextDay: item.nextDay, time: item.time, teams: [left, right], bd, ou };
+      });
+      const rowKeys = new Set<string>();
+      rows.forEach((row, index) => {
+        const key = `${row.nextDay}:${row.time}:${row.teams[0]}:${row.teams[1]}`.toLowerCase();
+        if (rowKeys.has(key)) throw new Error(`Row ${index + 1}: JSON ထဲတွင် match ထပ်နေပါသည်။`);
+        rowKeys.add(key);
+        const kickoff = kickoffIso(activeDate, row.time, row.nextDay);
+        if (dayMatches.some(match => (match.kickoffAt === kickoff || (match.time === row.time && kickoffLocalDate(match.kickoffAt) === kickoffLocalDate(kickoff))) && match.home === row.teams[0] && match.away === row.teams[1])) throw new Error(`Row ${index + 1}: ${row.teams[0]} vs ${row.teams[1]} ကို ထည့်ပြီးသားဖြစ်သည်။`);
+      });
+      const missingCodes: Record<string, string> = {};
+      [...new Set(rows.flatMap(row => row.teams))].filter(name => !teams.some(team => team.name === name)).forEach(name => { missingCodes[name] = ''; });
+      setBulkPreview({ rows, missingCodes });
+    } catch (error) { setBulkError(error instanceof Error ? error.message : 'JSON ကိုဖတ်မရပါ။'); }
+  };
+  const saveBulkMatches = async () => {
+    if (!store || !bulkPreview) return;
+    const entries = Object.entries(bulkPreview.missingCodes);
+    const normalizedCodes = entries.map(([name, code]) => [name, code.trim().toLowerCase().replace(/\s+/g, '')] as const);
+    const invalid = normalizedCodes.find(([, code]) => !/^[a-z0-9]+$/.test(code));
+    if (invalid) return setBulkError(`${invalid[0]} အတွက် English letter/number short code ထည့်ပါ။`);
+    const allCodes = [...teams.map(team => team.code.toLowerCase()), ...normalizedCodes.map(([, code]) => code)];
+    if (new Set(allCodes).size !== allCodes.length) return setBulkError('Short code ထပ်နေပါသည်။ မတူသော code များသုံးပါ။');
+    const newTeams: Team[] = normalizedCodes.map(([name, code]) => ({ id: uid(), name, code }));
+    const createdMatches: Match[] = bulkPreview.rows.map(row => ({
+      id: uid(), date: activeDate, bookmaker: activeBookmaker, time: row.time, home: row.teams[0], away: row.teams[1],
+      homeScore: null, awayScore: null, postponed: false, kickoffAt: kickoffIso(activeDate, row.time, row.nextDay),
+      rules: [...(row.bd ? [ruleFromCode('body', row.bd)] : []), ...(row.ou ? [ruleFromCode('total', row.ou)] : [])],
+    }));
+    await save({ ...store, teams: [...teams, ...newTeams], matches: [...matches, ...createdMatches] });
+    setBulkPreview(null); setBulkJson(''); setBulkOpen(false); setBulkError('');
+    flash(`Match ${createdMatches.length} ပွဲ${newTeams.length ? ` · Team အသစ် ${newTeams.length} သင်း` : ''} ကို တစ်ခါတည်းထည့်ပြီးပါပြီ။`);
+  };
   const saveResult = async (m: Match, homeScore: string, awayScore: string, postponed: boolean) => { if (!store) return; if (!postponed && (homeScore === '' || awayScore === '')) return flash('Result နှစ်ဖက်လုံး ထည့်ပါ၊ သို့မဟုတ် P:P ကိုရွေးပါ။'); const updated = { ...m, homeScore: postponed ? null : Number(homeScore), awayScore: postponed ? null : Number(awayScore), postponed, resultSource: 'manual' as const }; await save({ ...store, matches: matches.map(x => x.id === m.id ? updated : x) }); flash(postponed ? 'P:P / Refund အဖြစ်သိမ်းပြီးပါပြီ။' : 'Result သိမ်းပြီး settlement ကို update လုပ်ပြီးပါပြီ။'); };
   const resetBetForm = () => { setEditingBetId(null); setInsertAfterBetId(null); setBetForm({ matchId: '', ruleId: '', selection: 'home', note: '', amount: '', lateReceivedAt: '', lateReason: '' }); };
   const addBet = async (e: React.FormEvent) => {
@@ -562,7 +625,7 @@ export function App() {
     const shifted = prior.map((item, index) => ({ ...item, sortOrder: index >= insertAt ? index + 1 : index }));
     const bet: Bet = { id: uid(), date: activeDate, bookmaker: activeBookmaker, matchId: match.id, ruleId: rule.id, selection, note: '', amount: request.amount, sortOrder: insertAt, ruleSnapshot: structuredClone(rule), placedAt: new Date().toISOString(), lateEntry: false, lateReason: '' };
     await save({ ...store, bets: [...bets.filter(item => item.date !== activeDate || item.bookmaker !== activeBookmaker), ...shifted, bet] });
-    void speakBetConfirmation(match, rule, selection, request.amount);
+    void speakBetConfirmation(match, rule, selection, request.amount, request.team.name);
     setQuickEntry(''); setQuickCandidates(null); setInsertAfterBetId(null);
     const choice = market === 'body' ? (selection === 'home' ? match.home : match.away) : selection === 'up' ? 'Up' : 'Down';
     flash(`✓ ${match.home} vs ${match.away} · ${choice} · ${money(request.amount)} Ks သိမ်းပြီးပါပြီ။`);
@@ -709,6 +772,25 @@ export function App() {
     await save({ ...store, teams: teams.filter(item => item.id !== team.id) });
     flash(`${team.name} ကို Team list မှဖျက်ပြီးပါပြီ။`);
   };
+  const deleteAllTeams = async () => {
+    if (!store || teams.length === 0 || deletingAllTeams) return;
+    const recordedCount = teams.filter(team => team.hasVoiceClip).length;
+    const confirmed = await askConfirm(`Team ${teams.length} သင်းလုံးကို ဖျက်မလား?\n\nShort code၊ API mapping နှင့် team voice recording ${recordedCount} ခုကိုပါ ဖျက်မည်။ ရှိပြီးသား match နှင့် လောင်းမှတ်တမ်းများကို မဖျက်ပါ။ ဤလုပ်ဆောင်ချက်ကို ပြန်ယူ၍မရပါ။`);
+    if (!confirmed) return;
+    setDeletingAllTeams(true);
+    try {
+      await Promise.all(teams.filter(team => team.hasVoiceClip).map(team => window.footballPos.teamVoice.remove(team.id)));
+      await save({ ...store, teams: [] });
+      cancelEditingTeamCode();
+      setTeamSearch('');
+      setTeamForm({ name: '', code: '', voiceName: '' });
+      flash(`Team ${teams.length} သင်းလုံးကို ဖျက်ပြီးပါပြီ။ Match နှင့် လောင်းမှတ်တမ်းများကို မပြောင်းပါ။`);
+    } catch (error) {
+      flash(error instanceof Error ? `Team များကို ဖျက်မရပါ: ${error.message}` : 'Team များကို ဖျက်မရပါ။');
+    } finally {
+      setDeletingAllTeams(false);
+    }
+  };
   const startEditingTeamCode = (team: Team) => { setEditingTeamId(team.id); setEditingTeamCode(team.code); setEditingTeamVoiceName(team.voiceName ?? ''); };
   const cancelEditingTeamCode = () => { setEditingTeamId(null); setEditingTeamCode(''); setEditingTeamVoiceName(''); };
   const saveTeamCode = async (team: Team) => {
@@ -760,14 +842,58 @@ export function App() {
     fixtureDateCache.current.set(date, fixtures);
     return fixtures;
   };
+  const sortFixturesForMatch = (match: Match, fixtures: ApiFixture[]) => {
+    const targetTime = new Date(match.kickoffAt ?? kickoffIso(match.date, match.time, match.time < '06:00')).valueOf();
+    const left = teams.find(team => team.name === match.home); const right = teams.find(team => team.name === match.away);
+    const knownTeamHits = (fixture: ApiFixture) => [left, right].filter(team => team && (teamMatchesApi(team, fixture.homeId, fixture.home) || teamMatchesApi(team, fixture.awayId, fixture.away))).length;
+    return [...fixtures].sort((a, b) => knownTeamHits(b) - knownTeamHits(a) || Math.abs(new Date(a.kickoffAt).valueOf() - targetTime) - Math.abs(new Date(b.kickoffAt).valueOf() - targetTime));
+  };
+  const openFixtureForMatch = async (match: Match) => {
+    const searchDate = kickoffLocalDate(match.kickoffAt) || (match.time < '06:00' ? nextDate(match.date) : match.date);
+    const fixtures = sortFixturesForMatch(match, await loadFixtureDate(searchDate));
+    setFixtureFilter(''); setFixturePicker({ match, fixtures, searchDate });
+  };
+  const teamMatchesApi = (team: Team | undefined, apiId: number, apiName: string) => {
+    if (!team) return false;
+    if (team.apiTeamId) return team.apiTeamId === apiId;
+    const knownName = team.apiName?.trim() || team.voiceName?.trim();
+    return Boolean(knownName && normalizeApiName(knownName) === normalizeApiName(apiName));
+  };
+  const mappedFixtureForMatch = (match: Match, fixtures: ApiFixture[], teamList: Team[]) => {
+    const left = teamList.find(team => team.name === match.home);
+    const right = teamList.find(team => team.name === match.away);
+    const targetTime = new Date(match.kickoffAt ?? kickoffIso(match.date, match.time, match.time < '06:00')).valueOf();
+    const candidates = fixtures.flatMap(fixture => {
+      if (Math.abs(new Date(fixture.kickoffAt).valueOf() - targetTime) > 3 * 60 * 60 * 1_000) return [];
+      if (teamMatchesApi(left, fixture.homeId, fixture.home) && teamMatchesApi(right, fixture.awayId, fixture.away)) return [{ fixture, reversed: false }];
+      if (teamMatchesApi(left, fixture.awayId, fixture.away) && teamMatchesApi(right, fixture.homeId, fixture.home)) return [{ fixture, reversed: true }];
+      return [];
+    });
+    return candidates.length === 1 ? candidates[0] : null;
+  };
+  const matchWithFixture = (match: Match, fixture: ApiFixture, apiSidesReversed: boolean): Match => ({
+    ...match,
+    time: new Intl.DateTimeFormat('en-GB', { timeZone: 'Asia/Yangon', hour: '2-digit', minute: '2-digit', hour12: false }).format(new Date(fixture.kickoffAt)),
+    kickoffAt: fixture.kickoffAt, apiFixtureId: fixture.id, apiHome: fixture.home, apiAway: fixture.away, apiSidesReversed,
+    apiStatus: fixture.status, apiLeague: fixture.league, resultCheckedAt: new Date().toISOString(),
+    homeScore: null, awayScore: null, resultSource: undefined,
+  });
+  const learnApiTeams = (teamList: Team[], match: Match, fixture: ApiFixture, reversed: boolean) => {
+    const leftApi = reversed ? { id: fixture.awayId, name: fixture.away } : { id: fixture.homeId, name: fixture.home };
+    const rightApi = reversed ? { id: fixture.homeId, name: fixture.home } : { id: fixture.awayId, name: fixture.away };
+    return teamList.map(team => team.name === match.home ? { ...team, apiTeamId: leftApi.id, apiName: leftApi.name } : team.name === match.away ? { ...team, apiTeamId: rightApi.id, apiName: rightApi.name } : team);
+  };
+  const learnExistingApiNames = (teamList: Team[]) => matches.reduce((knownTeams, match) => {
+    if (!match.apiHome || !match.apiAway) return knownTeams;
+    const leftName = match.apiSidesReversed ? match.apiAway : match.apiHome;
+    const rightName = match.apiSidesReversed ? match.apiHome : match.apiAway;
+    return knownTeams.map(team => team.name === match.home && !team.apiName ? { ...team, apiName: leftName } : team.name === match.away && !team.apiName ? { ...team, apiName: rightName } : team);
+  }, teamList);
   const linkApiFixture = async (match: Match) => {
     if (!apiKeyConfigured) return flash('Settings တွင် API-Football key အရင်ထည့်ပါ။');
     try {
-      const searchDate = kickoffLocalDate(match.kickoffAt) || (match.time < '06:00' ? nextDate(match.date) : match.date);
-      const fixtures = await loadFixtureDate(searchDate);
-      const targetTime = new Date(match.kickoffAt ?? kickoffIso(match.date, match.time, match.time < '06:00')).valueOf();
-      fixtures.sort((a, b) => Math.abs(new Date(a.kickoffAt).valueOf() - targetTime) - Math.abs(new Date(b.kickoffAt).valueOf() - targetTime));
-      setFixtureFilter(''); setFixturePicker({ match, fixtures, searchDate });
+      setBulkApiQueue([]);
+      await openFixtureForMatch(match);
     } catch (error) { flash(error instanceof Error ? error.message : 'Fixture ရှာမရပါ။'); }
   };
   const searchApiFixtureDate = async () => {
@@ -775,19 +901,83 @@ export function App() {
     setFixturePickerLoading(true);
     try {
       const fixtures = await loadFixtureDate(fixturePicker.searchDate, true);
-      const targetTime = new Date(fixturePicker.match.kickoffAt ?? kickoffIso(fixturePicker.match.date, fixturePicker.match.time, fixturePicker.match.time < '06:00')).valueOf();
-      fixtures.sort((a, b) => Math.abs(new Date(a.kickoffAt).valueOf() - targetTime) - Math.abs(new Date(b.kickoffAt).valueOf() - targetTime));
+      const sorted = sortFixturesForMatch(fixturePicker.match, fixtures);
       setFixtureFilter('');
-      setFixturePicker(current => current ? { ...current, fixtures } : null);
+      setFixturePicker(current => current ? { ...current, fixtures: sorted } : null);
     } catch (error) { flash(error instanceof Error ? error.message : 'Fixture ရှာမရပါ။'); }
     finally { setFixturePickerLoading(false); }
   };
   const chooseApiFixture = async (fixture: ApiFixture, apiSidesReversed: boolean) => {
     if (!store || !fixturePicker) return;
-    const time = new Intl.DateTimeFormat('en-GB', { timeZone: 'Asia/Yangon', hour: '2-digit', minute: '2-digit', hour12: false }).format(new Date(fixture.kickoffAt));
-    const updated: Match = { ...fixturePicker.match, time, kickoffAt: fixture.kickoffAt, apiFixtureId: fixture.id, apiHome: fixture.home, apiAway: fixture.away, apiSidesReversed, apiStatus: fixture.status, apiLeague: fixture.league, resultCheckedAt: new Date().toISOString(), homeScore: null, awayScore: null, resultSource: undefined };
-    await save({ ...store, matches: matches.map(match => match.id === updated.id ? updated : match) });
-    setFixturePicker(null); flash(`API Fixture #${fixture.id} ကို ${apiSidesReversed ? 'ဘယ်/ညာ ပြောင်းပြီး' : 'API အစဉ်အတိုင်း'} ချိတ်ပြီးပါပြီ။`);
+    const alreadyLinked = matches.find(match => match.id !== fixturePicker.match.id
+      && match.date === fixturePicker.match.date
+      && match.bookmaker === fixturePicker.match.bookmaker
+      && match.apiFixtureId === fixture.id);
+    if (alreadyLinked) return flash(`ဒီ API fixture ကို ${alreadyLinked.home} vs ${alreadyLinked.away} နှင့် ချိတ်ထားပြီးသားဖြစ်သည်။`);
+    const updated = matchWithFixture(fixturePicker.match, fixture, apiSidesReversed);
+    const remaining = bulkApiQueue.filter(id => id !== updated.id);
+    let updatedMatches = matches.map(match => match.id === updated.id ? updated : match);
+    let updatedTeams = learnApiTeams(teams, fixturePicker.match, fixture, apiSidesReversed);
+    const usedFixtureIds = new Set(updatedMatches
+      .filter(match => match.apiFixtureId && match.date === fixturePicker.match.date && match.bookmaker === fixturePicker.match.bookmaker)
+      .map(match => match.apiFixtureId as number));
+    const unresolved: string[] = [];
+    let newlyAutoLinked = 0;
+    for (const id of remaining) {
+      const queued = updatedMatches.find(match => match.id === id);
+      if (!queued) continue;
+      const date = kickoffLocalDate(queued.kickoffAt) || (queued.time < '06:00' ? nextDate(queued.date) : queued.date);
+      const mapped = mappedFixtureForMatch(queued, fixtureDateCache.current.get(date) ?? [], updatedTeams);
+      if (!mapped || usedFixtureIds.has(mapped.fixture.id)) { unresolved.push(id); continue; }
+      const linked = matchWithFixture(queued, mapped.fixture, mapped.reversed);
+      updatedMatches = updatedMatches.map(match => match.id === id ? linked : match);
+      updatedTeams = learnApiTeams(updatedTeams, queued, mapped.fixture, mapped.reversed);
+      usedFixtureIds.add(mapped.fixture.id); newlyAutoLinked += 1;
+    }
+    await save({ ...store, teams: updatedTeams, matches: updatedMatches });
+    setBulkApiQueue(unresolved);
+    setFixturePicker(null);
+    if (unresolved.length) {
+      const next = updatedMatches.find(match => match.id === unresolved[0]);
+      if (next) await openFixtureForMatch(next);
+      flash(`Team mapping မှတ်ထားပြီး ${newlyAutoLinked ? `${newlyAutoLinked} ပွဲ ထပ်မံ auto-link လုပ်ခဲ့သည်။ ` : ''}ကျန် ${unresolved.length} ပွဲ။`);
+    } else flash(`API Fixture #${fixture.id} ချိတ်ပြီး Team mapping မှတ်ထားပါပြီ${newlyAutoLinked ? ` · နောက်ထပ် ${newlyAutoLinked} ပွဲ auto-link ပြီးပါပြီ` : ''}။`);
+  };
+  const bulkLinkApiMatches = async () => {
+    if (!store || bulkApiBusy) return;
+    if (!apiKeyConfigured) return flash('Settings တွင် API-Football key အရင်ထည့်ပါ။');
+    const targets = dayMatches.filter(match => !match.apiFixtureId);
+    if (!targets.length) return flash('ဤစာရင်းရက်ရှိ match အားလုံး API ချိတ်ပြီးသားဖြစ်သည်။');
+    setBulkApiBusy(true);
+    try {
+      const dates = [...new Set(targets.map(match => kickoffLocalDate(match.kickoffAt) || (match.time < '06:00' ? nextDate(match.date) : match.date)))];
+      const fixturesByDate = new Map<string, ApiFixture[]>();
+      for (const date of dates) fixturesByDate.set(date, await loadFixtureDate(date));
+      let nextTeams = learnExistingApiNames(teams);
+      let autoCount = 0;
+      const unresolved: string[] = [];
+      const usedFixtureIds = new Set(matches
+        .filter(match => match.apiFixtureId && match.date === activeDate && match.bookmaker === activeBookmaker)
+        .map(match => match.apiFixtureId as number));
+      const nextMatches = matches.map(match => {
+        if (!targets.some(target => target.id === match.id)) return match;
+        const date = kickoffLocalDate(match.kickoffAt) || (match.time < '06:00' ? nextDate(match.date) : match.date);
+        const mapped = mappedFixtureForMatch(match, fixturesByDate.get(date) ?? [], nextTeams);
+        if (!mapped || usedFixtureIds.has(mapped.fixture.id)) { unresolved.push(match.id); return match; }
+        autoCount += 1;
+        usedFixtureIds.add(mapped.fixture.id);
+        nextTeams = learnApiTeams(nextTeams, match, mapped.fixture, mapped.reversed);
+        return matchWithFixture(match, mapped.fixture, mapped.reversed);
+      });
+      await save({ ...store, teams: nextTeams, matches: nextMatches });
+      setBulkApiQueue(unresolved);
+      if (unresolved.length) {
+        const first = nextMatches.find(match => match.id === unresolved[0]);
+        if (first) await openFixtureForMatch(first);
+        flash(`${autoCount} ပွဲ auto-link ပြီးပါပြီ။ မသိသေးသော ${unresolved.length} ပွဲကို တစ်ပွဲစီရွေးပါ။`);
+      } else flash(`Match ${autoCount} ပွဲလုံး API auto-link ပြီးပါပြီ။`);
+    } catch (error) { flash(error instanceof Error ? error.message : 'API fixtures များကို မချိတ်နိုင်ပါ။'); }
+    finally { setBulkApiBusy(false); }
   };
   const toggleApiSides = async (match: Match) => {
     if (!store || !match.apiFixtureId) return;
@@ -1302,8 +1492,15 @@ export function App() {
       </article>
     </section>
   )}
-  {page === 'settings' && <section className="card appearance-card" style={{ marginBottom: '20px' }}><p className="eyebrow">APPEARANCE</p><h2>App Theme</h2><p className="muted">ညပိုင်းအသုံးပြုရာတွင် မျက်စိမစူးစေရန် Dark theme သို့ပြောင်းနိုင်သည်။ PDF report များသည် print ထုတ်ရန် Light ပုံစံအတိုင်းရှိမည်။</p><div className="theme-toggle" role="group" aria-label="App theme"><button type="button" className={store.settings.theme === 'light' ? 'selected' : ''} onClick={() => void save({ ...store, settings: { ...store.settings, theme: 'light' } })}>☀️ Light</button><button type="button" className={store.settings.theme === 'dark' ? 'selected' : ''} onClick={() => void save({ ...store, settings: { ...store.settings, theme: 'dark' } })}>🌙 Dark</button></div></section>}
-  {page === 'settings' && <section className="card voice-confirmation-card" style={{ marginBottom: '20px' }}>
+  {page === 'settings' && <nav className="settings-tabs" aria-label="Settings sections">
+    <button type="button" className={settingsTab === 'general' ? 'selected' : ''} onClick={() => setSettingsTab('general')}>⚙️ General</button>
+    <button type="button" className={settingsTab === 'report' ? 'selected' : ''} onClick={() => setSettingsTab('report')}>📊 Report & Data</button>
+    <button type="button" className={settingsTab === 'matches' ? 'selected' : ''} onClick={() => setSettingsTab('matches')}>⚽ Match Setup</button>
+    <button type="button" className={settingsTab === 'voice' ? 'selected' : ''} onClick={() => setSettingsTab('voice')}>🔊 Voice</button>
+    <button type="button" className={settingsTab === 'automation' ? 'selected' : ''} onClick={() => setSettingsTab('automation')}>🌙 Automation</button>
+  </nav>}
+  {page === 'settings' && settingsTab === 'general' && <section className="card appearance-card settings-tab-card"><p className="eyebrow">APPEARANCE</p><h2>App Theme</h2><p className="muted">ညပိုင်းအသုံးပြုရာတွင် မျက်စိမစူးစေရန် Dark theme သို့ပြောင်းနိုင်သည်။ PDF report များသည် print ထုတ်ရန် Light ပုံစံအတိုင်းရှိမည်။</p><div className="theme-toggle" role="group" aria-label="App theme"><button type="button" className={store.settings.theme === 'light' ? 'selected' : ''} onClick={() => void save({ ...store, settings: { ...store.settings, theme: 'light' } })}>☀️ Light</button><button type="button" className={store.settings.theme === 'dark' ? 'selected' : ''} onClick={() => void save({ ...store, settings: { ...store.settings, theme: 'dark' } })}>🌙 Dark</button></div></section>}
+  {page === 'settings' && settingsTab === 'voice' && <section className="card voice-confirmation-card settings-tab-card">
     <p className="eyebrow">VOICE CONFIRMATION</p>
     <h2>လောင်းမှတ်တမ်း အသံဖြင့်အတည်ပြုရန်</h2>
     <p className="muted">Team၊ Body/Over/Down၊ ဂဏန်းနှင့် unit အသံဖိုင်ရှိလျှင် recorded voice ကိုသုံးမည်။ မဖမ်းရသေးသောအသံတိုင်းကို system voice ဖြင့် အလိုအလျောက် fallback ပြောမည်။ အသံမြန်နှုန်းသည် recorded နှင့် system voice နှစ်မျိုးလုံးကို သက်ရောက်သည်။</p>
@@ -1321,12 +1518,12 @@ export function App() {
       </div>;
     })}</div>
   </section>}
-  {page === 'settings' && <section className="card" style={{ marginBottom: '20px' }}><p className="eyebrow">OVERNIGHT AUTOMATION</p><h2>API-Football Result Automation</h2><p className="muted">API key ကို encrypted storage တွင်သိမ်းသည်။ Project file နှင့် report များထဲ မထည့်ပါ။ Automation ဖွင့်ထားစဉ် Mac နှင့် display ကို app က အိပ်မသွားအောင် ထိန်းထားမည်။ Mac ကို charger ချိတ်၊ lid ဖွင့်ပြီး manually lock မလုပ်ပါနှင့်။</p><label>API Key<input type="password" autoComplete="off" value={apiKeyInput} onChange={e => setApiKeyInput(e.target.value)} placeholder={apiKeyConfigured ? 'Key သိမ်းပြီးသား — အသစ်ပြောင်းရန်သာ ထည့်ပါ' : 'API-Football key ထည့်ပါ'}/></label><button type="button" onClick={() => void saveApiKey()}>Key လုံခြုံစွာသိမ်းမည်</button><button type="button" className="secondary" onClick={() => void testApi()}>Connection စမ်းမည်</button>{apiMessage && <p className="muted">{apiMessage}</p>}<label className="check" style={{ margin: '14px 0 8px' }}><input type="checkbox" checked={store.settings.automation.enabled} onChange={e => void save({ ...store, settings: { ...store.settings, automation: { ...store.settings.automation, enabled: e.target.checked } } })}/> ညပိုင်း result အလိုအလျောက်စစ်မည် · Mac/display awake ထားမည်</label><div className="form-grid"><label>စစ်ဆေးချိန်မှ<input type="time" value={store.settings.automation.windowStart} onChange={e => void save({ ...store, settings: { ...store.settings, automation: { ...store.settings.automation, windowStart: e.target.value } } })}/></label><label>စစ်ဆေးချိန်အထိ<input type="time" value={store.settings.automation.windowEnd} onChange={e => void save({ ...store, settings: { ...store.settings, automation: { ...store.settings.automation, windowEnd: e.target.value } } })}/></label><label>မိနစ်ခြား<input type="number" min="5" max="60" value={store.settings.automation.pollMinutes} onChange={e => void save({ ...store, settings: { ...store.settings, automation: { ...store.settings.automation, pollMinutes: Math.max(5, Number(e.target.value) || 10) } } })}/></label></div><button type="button" disabled={automationBusy} onClick={() => void checkApiResults(true)}>{automationBusy ? 'စစ်ဆေးနေသည်…' : 'Result ယခုစစ်မည်'}</button><div className={`automation-status ${automationWindowActive ? 'active' : ''}`}><span className="automation-dot"/><div><b>{automationStatus}</b>{automationSettings?.enabled && <small>Mac/display awake · Myanmar time window {automationSettings.windowStart}–{automationSettings.windowEnd} · {automationSettings.pollMinutes} မိနစ်ခြား</small>}</div></div></section>}
-  {page === 'settings' && <section className="card viber-delivery-card" style={{ marginBottom: '20px' }}><p className="eyebrow">VIBER AUTO DELIVERY</p><h2>PDF ကို Viber Group သို့ပို့ရန်</h2><p className="muted">ပို့မည့်အချိန်တွင် configured group name ကို Viber conversation search ဖြင့်ရှာပြီး ရွေးပါမည်။ Accounting date တစ်ရက်တွင် Viber နှင့် Messenger နှစ်ခုလုံး data ရှိပါက report နှစ်ခုလုံး ready ဖြစ်သည်အထိစောင့်ပြီး PDF နှစ်ဖိုင်ကို တစ်ဆက်တည်းပို့မည်။ Channel တစ်ခုတည်းသာ data ရှိပါက ထိုဖိုင်ကို ready ဖြစ်ချိန်တွင်ပို့မည်။</p><label>Viber Group Name<input value={store.settings.viberDelivery.groupName} onChange={e => void save({ ...store, settings: { ...store.settings, viberDelivery: { ...store.settings.viberDelivery, groupName: e.target.value } } })} placeholder="ဥပမာ ဒိုင် gp စစ် test"/></label><button type="button" className="secondary" disabled={viberSendBusy || !store.settings.viberDelivery.groupName.trim()} onClick={() => void testViberGroupSelection()}>{viberSendBusy ? 'Viber ကိုစစ်နေသည်…' : 'Configured Group ကို ရှာဖွင့် စမ်းမည်'}</button><label className="check" style={{ margin: '14px 0 8px' }}><input type="checkbox" checked={store.settings.viberDelivery.autoSend} disabled={!store.settings.viberDelivery.groupName.trim()} onChange={e => void save({ ...store, settings: { ...store.settings, viberDelivery: { ...store.settings.viberDelivery, autoSend: e.target.checked } } })}/> PDF ထွက်ပြီးလျှင် ဤ Viber group သို့ အလိုအလျောက်ပို့မည်</label><button type="button" disabled={viberSendBusy || !store.settings.viberDelivery.groupName.trim()} onClick={() => void sendCurrentReportToViber()}>{viberSendBusy ? 'Viber သို့ပို့နေသည်…' : `လက်ရှိ ${activeBookmaker === 'viber' ? 'Viber' : 'Messenger'} Report PDF ကို Test ပို့မည်`}</button>{store.settings.viberDelivery.lastMessage && <div className={`automation-status ${store.settings.viberDelivery.lastStatus === 'sent' ? 'active' : ''}`}><span className="automation-dot"/><div><b>{store.settings.viberDelivery.lastMessage}</b>{store.settings.viberDelivery.lastSentAt && <small>{new Date(store.settings.viberDelivery.lastSentAt).toLocaleString('en-GB', { timeZone: 'Asia/Yangon' })}</small>}</div></div>}<p className="muted">App နှင့် Viber ကိုဖွင့်ထားရမည်။ Group name ကို အခြား chat နှင့် မတူအောင် unique ဖြစ်စေပါ။ ရှာဖွေရွေးချယ်မှု မအောင်မြင်လျှင် PDF မပို့ဘဲ နောက် interval တွင် retry လုပ်သည်။ ပို့ပြီးသော date/channel ကို ထပ်မပို့ပါ။</p></section>}
-  {page === 'settings' && <section className="card" style={{ marginBottom: '20px' }}><p className="eyebrow">CURRENT DATE DATA</p><h2>{activeDate} · {activeBookmaker === 'viber' ? 'Viber' : 'Messenger'}</h2><p className="muted">Match {dayMatches.length} ပွဲနှင့် လောင်းမှတ်တမ်း {dayBets.length} ခုကို အခြား channel သို့ ရွှေ့နိုင်သည်၊ သို့မဟုတ် မူရင်းကိုထားပြီး copy ကူးနိုင်သည်။</p><button type="button" onClick={() => void transferDayData('move')}>အခြား Channel သို့ ရွှေ့မည်</button><button type="button" className="secondary" onClick={() => void transferDayData('copy')}>မူရင်းထားပြီး Copy ကူးမည်</button></section>}
+  {page === 'settings' && settingsTab === 'automation' && <div className="settings-card-stack"><section className="card"><p className="eyebrow">OVERNIGHT AUTOMATION</p><h2>API-Football Result Automation</h2><p className="muted">API key ကို encrypted storage တွင်သိမ်းသည်။ Project file နှင့် report များထဲ မထည့်ပါ။ Automation ဖွင့်ထားစဉ် Mac နှင့် display ကို app က အိပ်မသွားအောင် ထိန်းထားမည်။ Mac ကို charger ချိတ်၊ lid ဖွင့်ပြီး manually lock မလုပ်ပါနှင့်။</p><label>API Key<input type="password" autoComplete="off" value={apiKeyInput} onChange={e => setApiKeyInput(e.target.value)} placeholder={apiKeyConfigured ? 'Key သိမ်းပြီးသား — အသစ်ပြောင်းရန်သာ ထည့်ပါ' : 'API-Football key ထည့်ပါ'}/></label><button type="button" onClick={() => void saveApiKey()}>Key လုံခြုံစွာသိမ်းမည်</button><button type="button" className="secondary" onClick={() => void testApi()}>Connection စမ်းမည်</button>{apiMessage && <p className="muted">{apiMessage}</p>}<label className="check" style={{ margin: '14px 0 8px' }}><input type="checkbox" checked={store.settings.automation.enabled} onChange={e => void save({ ...store, settings: { ...store.settings, automation: { ...store.settings.automation, enabled: e.target.checked } } })}/> ညပိုင်း result အလိုအလျောက်စစ်မည် · Mac/display awake ထားမည်</label><div className="form-grid"><label>စစ်ဆေးချိန်မှ<input type="time" value={store.settings.automation.windowStart} onChange={e => void save({ ...store, settings: { ...store.settings, automation: { ...store.settings.automation, windowStart: e.target.value } } })}/></label><label>စစ်ဆေးချိန်အထိ<input type="time" value={store.settings.automation.windowEnd} onChange={e => void save({ ...store, settings: { ...store.settings, automation: { ...store.settings.automation, windowEnd: e.target.value } } })}/></label><label>မိနစ်ခြား<input type="number" min="5" max="60" value={store.settings.automation.pollMinutes} onChange={e => void save({ ...store, settings: { ...store.settings, automation: { ...store.settings.automation, pollMinutes: Math.max(5, Number(e.target.value) || 10) } } })}/></label></div><button type="button" disabled={automationBusy} onClick={() => void checkApiResults(true)}>{automationBusy ? 'စစ်ဆေးနေသည်…' : 'Result ယခုစစ်မည်'}</button><div className={`automation-status ${automationWindowActive ? 'active' : ''}`}><span className="automation-dot"/><div><b>{automationStatus}</b>{automationSettings?.enabled && <small>Mac/display awake · Myanmar time window {automationSettings.windowStart}–{automationSettings.windowEnd} · {automationSettings.pollMinutes} မိနစ်ခြား</small>}</div></div></section>
+  <section className="card viber-delivery-card"><p className="eyebrow">VIBER AUTO DELIVERY</p><h2>PDF ကို Viber Group သို့ပို့ရန်</h2><p className="muted">ပို့မည့်အချိန်တွင် configured group name ကို Viber conversation search ဖြင့်ရှာပြီး ရွေးပါမည်။ Accounting date တစ်ရက်တွင် Viber နှင့် Messenger နှစ်ခုလုံး data ရှိပါက report နှစ်ခုလုံး ready ဖြစ်သည်အထိစောင့်ပြီး PDF နှစ်ဖိုင်ကို တစ်ဆက်တည်းပို့မည်။ Channel တစ်ခုတည်းသာ data ရှိပါက ထိုဖိုင်ကို ready ဖြစ်ချိန်တွင်ပို့မည်။</p><label>Viber Group Name<input value={store.settings.viberDelivery.groupName} onChange={e => void save({ ...store, settings: { ...store.settings, viberDelivery: { ...store.settings.viberDelivery, groupName: e.target.value } } })} placeholder="ဥပမာ ဒိုင် gp စစ် test"/></label><button type="button" className="secondary" disabled={viberSendBusy || !store.settings.viberDelivery.groupName.trim()} onClick={() => void testViberGroupSelection()}>{viberSendBusy ? 'Viber ကိုစစ်နေသည်…' : 'Configured Group ကို ရှာဖွင့် စမ်းမည်'}</button><label className="check" style={{ margin: '14px 0 8px' }}><input type="checkbox" checked={store.settings.viberDelivery.autoSend} disabled={!store.settings.viberDelivery.groupName.trim()} onChange={e => void save({ ...store, settings: { ...store.settings, viberDelivery: { ...store.settings.viberDelivery, autoSend: e.target.checked } } })}/> PDF ထွက်ပြီးလျှင် ဤ Viber group သို့ အလိုအလျောက်ပို့မည်</label><button type="button" disabled={viberSendBusy || !store.settings.viberDelivery.groupName.trim()} onClick={() => void sendCurrentReportToViber()}>{viberSendBusy ? 'Viber သို့ပို့နေသည်…' : `လက်ရှိ ${activeBookmaker === 'viber' ? 'Viber' : 'Messenger'} Report PDF ကို Test ပို့မည်`}</button>{store.settings.viberDelivery.lastMessage && <div className={`automation-status ${store.settings.viberDelivery.lastStatus === 'sent' ? 'active' : ''}`}><span className="automation-dot"/><div><b>{store.settings.viberDelivery.lastMessage}</b>{store.settings.viberDelivery.lastSentAt && <small>{new Date(store.settings.viberDelivery.lastSentAt).toLocaleString('en-GB', { timeZone: 'Asia/Yangon' })}</small>}</div></div>}<p className="muted">App နှင့် Viber ကိုဖွင့်ထားရမည်။ Group name ကို အခြား chat နှင့် မတူအောင် unique ဖြစ်စေပါ။ ရှာဖွေရွေးချယ်မှု မအောင်မြင်လျှင် PDF မပို့ဘဲ နောက် interval တွင် retry လုပ်သည်။ ပို့ပြီးသော date/channel ကို ထပ်မပို့ပါ။</p></section></div>}
+  {page === 'settings' && settingsTab === 'report' && <section className="card settings-tab-card"><p className="eyebrow">CURRENT DATE DATA</p><h2>{activeDate} · {activeBookmaker === 'viber' ? 'Viber' : 'Messenger'}</h2><p className="muted">Match {dayMatches.length} ပွဲနှင့် လောင်းမှတ်တမ်း {dayBets.length} ခုကို အခြား channel သို့ ရွှေ့နိုင်သည်၊ သို့မဟုတ် မူရင်းကိုထားပြီး copy ကူးနိုင်သည်။</p><button type="button" onClick={() => void transferDayData('move')}>အခြား Channel သို့ ရွှေ့မည်</button><button type="button" className="secondary" onClick={() => void transferDayData('copy')}>မူရင်းထားပြီး Copy ကူးမည်</button></section>}
   {page === 'report' && <section className="card report"><div className="report-head"><div><p className="eyebrow">{activeBookmaker.toUpperCase()} DAILY SETTLEMENT · {store.settings.view === 'dai' ? 'ဒိုင် View' : 'Player View'}</p><h2>{activeDate} စာရင်း</h2></div><div><button className="secondary" onClick={async () => { if (await window.footballPos.data.exportCsv(csvRows())) flash('Excel CSV export ပြီးပါပြီ။'); }}>Excel CSV ထုတ်</button><button onClick={() => void exportPdf()}>PDF ထုတ်</button></div></div><LedgerTable rows={reportSettlements} settings={activeCommission} view={store.settings.view} totals={reportTotals} sortable sortMode={reportSortMode} onSortModeChange={setReportSortMode}/><SummaryPanel totals={reportTotals}/></section>}
-  {page === 'settings' && <section className="settings-page">
-    <article className="card settings">
+  {page === 'settings' && (settingsTab === 'report' || settingsTab === 'matches') && <section className={`settings-page settings-page-${settingsTab}`}>
+    {settingsTab === 'report' && <article className="card settings">
       <h2>{activeBookmaker === 'viber' ? 'Viber' : 'Messenger'} Report Settings</h2>
       <p className="muted">ဒိုင်တစ်ခုချင်းစီ၏ commission rule ကို သီးခြားသိမ်းသည်။ View ပြောင်းခြင်းသည် record data ကို မပြောင်းပါ။</p>
       <label>View<select value={store.settings.view} onChange={e => void save({ ...store, settings: { ...store.settings, view: e.target.value as ViewMode } })}><option value="dai">ဒိုင် View</option><option value="player">Player View</option></select></label>
@@ -1339,9 +1536,28 @@ export function App() {
         <label>Gross WIN + LOSE ပေါ် Player ကိုပေးမည့် Commission (%)<input type="number" min="0" max="100" value={activeCommission.turnoverCommissionRate} onChange={e => updateBookmakerSettings({ turnoverCommissionRate: percent(Number(e.target.value)) })}/></label>
         <p className="muted">Messenger rule: WIN ကို {activeCommission.winTaxRate}% ဖြတ်ပြီး စုစုပေါင်း settled turnover ပေါ် {activeCommission.turnoverCommissionRate}% ကို Player အား ပြန်ပေးသည်။</p>
       </>}
-    </article>
-    <article className="card team-card">
-      <h2>Team list · Quick Code · Voice</h2>
+    </article>}
+    {settingsTab === 'matches' && <article className="card bulk-import-card">
+      <p className="eyebrow">BULK MATCH SETUP</p>
+      <h2>{activeDate} Match များကို JSON ဖြင့်ထည့်ရန်</h2>
+      <p className="muted">JSON ၏ left team ကို Body base team အဖြစ်ယူသည်။ <code>nextDay: true</code> သည် accounting date နောက်တစ်နေ့ kickoff ဖြစ်သော်လည်း report ကို {activeDate} ထဲမှာပဲထားမည်။</p>
+      <button type="button" className="secondary" onClick={() => { setBulkOpen(open => !open); setBulkError(''); }}>{bulkOpen ? 'JSON Import ပိတ်မည်' : '⚡ JSON Import ဖွင့်မည်'}</button>
+      <button type="button" disabled={bulkApiBusy || dayMatches.length === 0} onClick={() => void bulkLinkApiMatches()}>{bulkApiBusy ? 'API fixtures ရှာနေသည်…' : `API မချိတ်ရသေးသော Match အားလုံးချိတ်မည်`}</button>
+      <p className="muted">Actual kickoff date တစ်ရက်လျှင် API request တစ်ခုသာသုံးပြီး cache ထားမည်။ Team mapping သိပြီးသားပွဲကို auto-link လုပ်ပြီး မသိသေးသောပွဲများကို တစ်ပွဲစီရွေးခိုင်းမည်။</p>
+      {bulkOpen && <div className="bulk-import-box">
+        <textarea value={bulkJson} onChange={e => { setBulkJson(e.target.value); setBulkPreview(null); setBulkError(''); }} spellCheck={false} placeholder={'[\n  {\n    "nextDay": true,\n    "time": "01:45",\n    "teams": ["လိုင်ယွန်", "ပဲလေ့စ်"],\n    "bd": "D",\n    "ou": "3D"\n  }\n]'}/>
+        <div className="bulk-actions"><button type="button" className="secondary" onClick={() => { setBulkJson('[\n  {\n    "nextDay": true,\n    "time": "01:45",\n    "teams": ["လိုင်ယွန်", "ပဲလေ့စ်"],\n    "bd": "D",\n    "ou": "3D"\n  },\n  {\n    "nextDay": true,\n    "time": "01:45",\n    "teams": ["လေဗာကူဆင်", "လက်ပေါ့နန်"],\n    "bd": "1-50",\n    "ou": "4+90"\n  }\n]'); setBulkPreview(null); setBulkError(''); }}>နမူနာထည့်မည်</button><button type="button" onClick={parseBulkMatches}>JSON စစ်မည်</button></div>
+        {bulkError && <div className="bulk-error">{bulkError}</div>}
+        {bulkPreview && <div className="bulk-preview">
+          <div className="bulk-summary"><b>✓ Match {bulkPreview.rows.length} ပွဲ မှန်ကန်သည်</b><span>Team အသစ် {Object.keys(bulkPreview.missingCodes).length} သင်း</span></div>
+          {Object.keys(bulkPreview.missingCodes).length > 0 && <div className="bulk-team-codes"><b>Team အသစ်များအတွက် Quick Entry short code ဖြည့်ပါ</b>{Object.keys(bulkPreview.missingCodes).map(name => <label key={name}><span>{name}</span><input value={bulkPreview.missingCodes[name]} maxLength={12} placeholder="ဥပမာ ly" onChange={e => setBulkPreview(current => current ? { ...current, missingCodes: { ...current.missingCodes, [name]: e.target.value } } : null)}/></label>)}</div>}
+          <div className="bulk-match-preview">{bulkPreview.rows.map((row, index) => <div key={`${row.time}-${index}`}><span>{row.nextDay ? nextDate(activeDate) : activeDate} · {row.time}</span><b>{row.teams[0]} <em>vs</em> {row.teams[1]}</b><small>{row.bd ? `BD ${row.bd}` : ''}{row.bd && row.ou ? ' · ' : ''}{row.ou ? `O/U ${row.ou}` : ''}</small></div>)}</div>
+          <button type="button" onClick={() => void saveBulkMatches()}>အားလုံးသိမ်းမည်</button>
+        </div>}
+      </div>}
+    </article>}
+    {settingsTab === 'matches' && <article className="card team-card">
+      <div className="team-card-heading"><h2>Team list · Quick Code · Voice</h2><button type="button" className="danger-button" disabled={teams.length === 0 || deletingAllTeams} onClick={() => void deleteAllTeams()}>{deletingAllTeams ? 'ဖျက်နေသည်…' : `Team အားလုံးဖျက်မည် (${teams.length})`}</button></div>
       <p className="muted">မြန်မာအသင်းအမည်နှင့် Quick Entry short code သတ်မှတ်ပါ။ Team name အသံကိုဖမ်းနိုင်ပြီး English voice name သည် မထည့်လည်းရပါသည်။</p>
       <form className="team-form" onSubmit={addTeam}>
         <label>Team name<input value={teamForm.name} onChange={e => setTeamForm({ ...teamForm, name: e.target.value })} placeholder="မန်ချက်စတာ ယူနိုက်တက်"/></label>
@@ -1349,7 +1565,7 @@ export function App() {
         <label>English voice name (optional)<input value={teamForm.voiceName} onChange={e => setTeamForm({ ...teamForm, voiceName: e.target.value })} placeholder="Manchester United"/></label>
         <button type="submit">+ Team ထည့်မည်</button>
       </form>
-      <div className="team-list-toolbar"><input value={teamSearch} onChange={e => setTeamSearch(e.target.value)} placeholder="🔍 Team name, short code သို့ English name ရှာရန်"/><span>{filteredTeams.length} / {teams.length}</span></div>
+      <div className="team-list-toolbar"><input value={teamSearch} onChange={e => setTeamSearch(e.target.value)} placeholder="🔍 Team name, short code, voice/API name ရှာရန်"/><span>{filteredTeams.length} / {teams.length}</span></div>
       {teams.length === 0 ? <p className="muted">Team မရှိသေးပါ။</p> : filteredTeams.length === 0 ? <p className="muted">“{teamSearch}” နှင့်ကိုက်ညီသော Team မတွေ့ပါ။</p> : <div className="team-list">{filteredTeams.map(team => <div key={team.id}>
         <b>{team.name}</b>
         {editingTeamId === team.id ? <div className="team-code-edit">
@@ -1359,6 +1575,7 @@ export function App() {
           <button type="button" className="secondary" onClick={cancelEditingTeamCode}>မလုပ်တော့ပါ</button>
         </div> : <>
           <span className="team-voice-name">{team.hasVoiceClip ? '🎙 အသံရှိ' : team.voiceName ? `🔊 ${team.voiceName}` : 'အသံမရှိ'}</span>
+          {team.apiName && <span className="team-api-name">API: {team.apiName}</span>}
           <code>{team.code}</code>
           <button type="button" className="link" onClick={() => startEditingTeamCode(team)}>Code/Voice ပြင်</button>
           <button type="button" className="link danger" onClick={() => void deleteTeam(team)}>ဖျက်</button>
@@ -1369,7 +1586,7 @@ export function App() {
           {team.hasVoiceClip && <button type="button" className="link danger" disabled={voiceClipBusyId === team.id || Boolean(recordingTeamId)} onClick={() => void removeTeamVoice(team)}>အသံဖျက်</button>}
         </div>
       </div>)}</div>}
-    </article>
+    </article>}
   </section>}
   </div>{confirmation && <div className="confirm-overlay" role="dialog" aria-modal="true"><div className="confirm-modal"><h3>အတည်ပြုပါ</h3><p>{confirmation.message}</p><div><button type="button" className="secondary" onClick={() => closeConfirm(false)}>မလုပ်တော့ပါ</button><button type="button" autoFocus onClick={() => closeConfirm(true)}>အတည်ပြုမည်</button></div></div></div>}</main>;
 }

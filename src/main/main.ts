@@ -77,6 +77,7 @@ function normalizeFixture(raw: any): ApiFixture {
   return {
     id: Number(raw.fixture?.id), kickoffAt: String(raw.fixture?.date ?? ''),
     home: String(raw.teams?.home?.name ?? ''), away: String(raw.teams?.away?.name ?? ''),
+    homeId: Number(raw.teams?.home?.id ?? 0), awayId: Number(raw.teams?.away?.id ?? 0),
     league: String(raw.league?.name ?? ''), status: String(raw.fixture?.status?.short ?? ''),
     elapsed: raw.fixture?.status?.elapsed ?? null, homeScore: raw.goals?.home ?? null, awayScore: raw.goals?.away ?? null,
     fullTimeHome: raw.score?.fulltime?.home ?? null, fullTimeAway: raw.score?.fulltime?.away ?? null,
