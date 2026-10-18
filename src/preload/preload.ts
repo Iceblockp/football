@@ -5,9 +5,14 @@ const api: DesktopApi = {
   data: {
     load: () => ipcRenderer.invoke('data:load'),
     save: (store) => ipcRenderer.invoke('data:save', store),
+    backup: (store) => ipcRenderer.invoke('data:backup', store),
     exportCsv: (rows) => ipcRenderer.invoke('report:csv', rows),
     exportPdf: (title, html) => ipcRenderer.invoke('report:pdf', title, html),
     exportPdfAuto: (title, html) => ipcRenderer.invoke('report:pdf:auto', title, html),
+  },
+  transfer: {
+    export: (payload) => ipcRenderer.invoke('transfer:export', payload),
+    import: () => ipcRenderer.invoke('transfer:import'),
   },
   apiFootball: {
     hasKey: () => ipcRenderer.invoke('api-football:has-key'),

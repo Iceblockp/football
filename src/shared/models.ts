@@ -3,7 +3,8 @@ export type Selection = 'home' | 'away' | 'up' | 'down';
 export type BodyBaseSide = 'home' | 'away';
 export type Outcome = 'win' | 'loss' | 'refund';
 export type ViewMode = 'dai' | 'player';
-export type Bookmaker = 'viber' | 'messenger';
+/** Stable channel id. Legacy values `viber` and `messenger` remain valid ids. */
+export type Bookmaker = string;
 export type AppearanceTheme = 'light' | 'dark';
 export type CommonVoiceKey = 'body' | 'over' | 'down' | '0' | '1' | '2' | '3' | '4' | '5' | '6' | '7' | '8' | '9' | 'k' | 'w' | 'l' | 'm';
 
@@ -19,8 +20,17 @@ export interface BookmakerSettings {
   turnoverCommissionRate: number;
 }
 
+export interface Channel {
+  id: Bookmaker;
+  name: string;
+  enabled: boolean;
+}
+
 export interface Team {
   id: string;
+  bookmaker: Bookmaker;
+  /** Stable id from another device, used only for duplicate-safe imports. */
+  sourceId?: string;
   name: string;
   code: string;
   /** English name spoken by the local voice confirmation. */
@@ -35,6 +45,8 @@ export interface Team {
 export interface Band { outcome: Outcome; rate: number }
 export interface Rule {
   id: string; code: string; market: Market; line: number;
+  /** Stable id from another device, used only for duplicate-safe imports. */
+  sourceId?: string;
   below: Band; equal: Band; above: Band;
   /** Team whose goal difference the Body rule code is quoted from. Old rules default to home. */
   bodyBaseSide?: BodyBaseSide;
@@ -44,6 +56,8 @@ export interface Rule {
 }
 export interface Match {
   id: string; date: string; bookmaker: Bookmaker; time: string; home: string; away: string;
+  /** Stable id from another device, used only for duplicate-safe imports. */
+  sourceId?: string;
   homeScore: number | null; awayScore: number | null; postponed: boolean; rules: Rule[];
   /** Real kickoff instant. `date` remains the business/report date. */
   kickoffAt?: string;
@@ -59,6 +73,8 @@ export interface Match {
 }
 export interface Bet {
   id: string; date: string; bookmaker: Bookmaker; matchId: string; ruleId: string; selection: Selection;
+  /** Stable id from another device, used only for duplicate-safe imports. */
+  sourceId?: string;
   note: string; amount: number;
   /** Display order inside one day's ledger. This is independent of the immutable bet ID. */
   sortOrder?: number;
@@ -77,6 +93,7 @@ export interface Store {
       rate: number;
       commonClips: CommonVoiceKey[];
     };
+    channels: Channel[];
     bookmakerSettings: Record<Bookmaker, BookmakerSettings>;
     automation: {
       enabled: boolean;
@@ -115,8 +132,22 @@ export interface ApiFixture {
   fullTimeHome: number | null;
   fullTimeAway: number | null;
 }
+export interface TransferTeam extends Omit<Team, 'bookmaker' | 'hasVoiceClip' | 'sourceId'> {}
+export interface TransferRule extends Omit<Rule, 'sourceId'> {}
+export interface TransferMatch extends Omit<Match, 'bookmaker' | 'date' | 'rules' | 'sourceId'> { rules: TransferRule[] }
+export interface TransferBet extends Omit<Bet, 'bookmaker' | 'date' | 'sourceId'> {}
+export interface TransferPackageCore {
+  format: 'football-bet-pos-transfer';
+  version: 1;
+  packageId: string;
+  exportedAt: string;
+  sourceDate: string;
+  data: { teams: TransferTeam[]; matches: TransferMatch[]; bets: TransferBet[] };
+}
+export interface TransferPackage extends TransferPackageCore { checksum: string }
 export interface DesktopApi {
-  data: { load: () => Promise<Store>; save: (store: Store) => Promise<void>; exportCsv: (rows: string[][]) => Promise<boolean>; exportPdf: (title: string, html: string) => Promise<boolean>; exportPdfAuto: (title: string, html: string) => Promise<string> };
+  data: { load: () => Promise<Store>; save: (store: Store) => Promise<void>; backup: (store: Store) => Promise<string>; exportCsv: (rows: string[][]) => Promise<boolean>; exportPdf: (title: string, html: string) => Promise<boolean>; exportPdfAuto: (title: string, html: string) => Promise<string> };
+  transfer: { export: (payload: TransferPackageCore) => Promise<boolean>; import: () => Promise<TransferPackage | null> };
   apiFootball: {
     hasKey: () => Promise<boolean>;
     saveKey: (key: string) => Promise<boolean>;

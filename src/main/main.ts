@@ -1,17 +1,30 @@
 import { app, BrowserWindow, dialog, ipcMain, powerSaveBlocker, safeStorage } from 'electron';
 import { execFile } from 'node:child_process';
-import { mkdir, readFile, rm, writeFile } from 'node:fs/promises';
+import { createHash } from 'node:crypto';
+import { copyFile, mkdir, readFile, rm, stat, writeFile } from 'node:fs/promises';
 import { existsSync } from 'node:fs';
 import { join, resolve } from 'node:path';
 import { promisify } from 'node:util';
-import type { ApiFixture, BookmakerSettings, CommonVoiceKey, Store } from '../shared/models';
+import type { ApiFixture, BookmakerSettings, Channel, CommonVoiceKey, Store, Team, TransferPackage, TransferPackageCore } from '../shared/models';
 
 const defaultViberSettings = (): BookmakerSettings => ({ mode: 'direct', playerWinDeduction: 3, playerLossRebate: 2, winTaxRate: 0, turnoverCommissionRate: 0 });
 const defaultMessengerSettings = (): BookmakerSettings => ({ mode: 'summary', playerWinDeduction: 0, playerLossRebate: 0, winTaxRate: 5, turnoverCommissionRate: 2 });
 const defaultAutomation = () => ({ enabled: false, pollMinutes: 10, windowStart: '00:00', windowEnd: '06:00', autoExportPdf: true, exportedReports: [] as string[] });
 const defaultViberDelivery = () => ({ groupName: '', autoSend: false, sentReports: [] as string[], pendingReports: [] as string[], lastStatus: 'idle' as const, lastMessage: '' });
 const defaultVoiceConfirmation = () => ({ enabled: true, rate: 1.35, commonClips: [] as CommonVoiceKey[] });
-const emptyStore = (): Store => ({ teams: [], matches: [], bets: [], settings: { view: 'dai', theme: 'light', voiceConfirmation: defaultVoiceConfirmation(), bookmakerSettings: { viber: defaultViberSettings(), messenger: defaultMessengerSettings() }, automation: defaultAutomation(), viberDelivery: defaultViberDelivery() } });
+const defaultChannels = (): Channel[] => [
+  { id: 'viber', name: 'Viber ဒိုင်', enabled: true },
+  { id: 'messenger', name: 'Messenger ဒိုင်', enabled: true },
+  { id: 'channel-3', name: 'Channel 3', enabled: true },
+  { id: 'channel-4', name: 'Channel 4', enabled: true },
+];
+const defaultBookmakerSettings = (): Record<string, BookmakerSettings> => ({
+  viber: defaultViberSettings(),
+  messenger: defaultMessengerSettings(),
+  'channel-3': defaultMessengerSettings(),
+  'channel-4': defaultMessengerSettings(),
+});
+const emptyStore = (): Store => ({ teams: [], matches: [], bets: [], settings: { view: 'dai', theme: 'light', voiceConfirmation: defaultVoiceConfirmation(), channels: defaultChannels(), bookmakerSettings: defaultBookmakerSettings(), automation: defaultAutomation(), viberDelivery: defaultViberDelivery() } });
 const execFileAsync = promisify(execFile);
 let mainWindow: BrowserWindow | null = null;
 let automationPowerBlocker: number | null = null;
@@ -43,14 +56,48 @@ async function loadStore(): Promise<Store> {
       ? { ...defaultViberSettings(), ...savedBookmakers.viber }
       : { ...defaultViberSettings(), playerWinDeduction: legacySettings?.daiLossRate ?? 3, playerLossRebate: legacySettings?.daiWinRate ?? 2 };
     const messenger = { ...defaultMessengerSettings(), ...savedBookmakers?.messenger };
-    return {
+    const savedChannels = Array.isArray(legacySettings?.channels) ? legacySettings.channels : [];
+    const savedChannelMap = new Map(savedChannels.filter(channel => channel && typeof channel.id === 'string').map(channel => [channel.id, channel]));
+    const channels = [
+      ...defaultChannels().map(channel => ({ ...channel, ...savedChannelMap.get(channel.id) })),
+      ...savedChannels.filter(channel => !defaultChannels().some(item => item.id === channel.id)),
+    ];
+    const bookmakerSettings: Record<string, BookmakerSettings> = {
+      ...defaultBookmakerSettings(),
+      ...savedBookmakers,
+      viber,
+      messenger,
+      'channel-3': { ...messenger, ...savedBookmakers?.['channel-3'] },
+      'channel-4': { ...messenger, ...savedBookmakers?.['channel-4'] },
+    };
+    channels.forEach(channel => { bookmakerSettings[channel.id] = { ...defaultMessengerSettings(), ...bookmakerSettings[channel.id] }; });
+    const rawTeams = Array.isArray(raw.teams) ? raw.teams : [];
+    const legacyTeams = rawTeams.some(team => !team.bookmaker);
+    const teams: Team[] = legacyTeams
+      ? rawTeams.flatMap(team => team.bookmaker
+        ? [team as Team]
+        : channels.map((channel, index) => ({ ...team, id: index === 0 ? team.id : `${team.id}-${channel.id}`.replace(/[^a-zA-Z0-9-]+/g, '-'), bookmaker: channel.id }))) as Team[]
+      : rawTeams as Team[];
+    if (legacyTeams) {
+      for (const team of rawTeams.filter(team => !team.bookmaker && team.hasVoiceClip)) {
+        for (const clone of teams.filter(item => item.name === team.name && item.id !== team.id)) {
+          try { await mkdir(teamVoiceFolder(), { recursive: true }); await copyFile(teamVoicePath(team.id), teamVoicePath(clone.id)); } catch { /* missing legacy clip */ }
+        }
+      }
+    }
+    const migrated: Store = {
       ...emptyStore(),
       ...raw,
-      teams: Array.isArray(raw.teams) ? raw.teams : [],
+      teams,
       matches: Array.isArray(raw.matches) ? raw.matches.map(match => ({ ...match, bookmaker: match.bookmaker ?? 'viber' })) : [],
       bets: Array.isArray(raw.bets) ? raw.bets.map(bet => ({ ...bet, bookmaker: bet.bookmaker ?? 'viber' })) : [],
-      settings: { view: legacySettings?.view ?? 'dai', theme: legacySettings?.theme === 'dark' ? 'dark' : 'light', voiceConfirmation: { ...defaultVoiceConfirmation(), ...legacySettings?.voiceConfirmation }, bookmakerSettings: { viber, messenger }, automation: { ...defaultAutomation(), ...legacySettings?.automation }, viberDelivery: { ...defaultViberDelivery(), ...legacySettings?.viberDelivery } },
+      settings: { view: legacySettings?.view ?? 'dai', theme: legacySettings?.theme === 'dark' ? 'dark' : 'light', voiceConfirmation: { ...defaultVoiceConfirmation(), ...legacySettings?.voiceConfirmation }, channels, bookmakerSettings, automation: { ...defaultAutomation(), ...legacySettings?.automation }, viberDelivery: { ...defaultViberDelivery(), ...legacySettings?.viberDelivery } },
     };
+    if (legacyTeams) {
+      try { await writeFile(dataPath(), JSON.stringify(migrated, null, 2), 'utf8'); }
+      catch { /* keep the migrated in-memory store even if persistence must wait for the next save */ }
+    }
+    return migrated;
   } catch { return emptyStore(); }
 }
 async function saveStore(store: Store) { await mkdir(app.getPath('userData'), { recursive: true }); await writeFile(dataPath(), JSON.stringify(store, null, 2), 'utf8'); }
@@ -221,9 +268,41 @@ function createWindow() {
   else void mainWindow.loadFile(join(__dirname, '../../renderer/index.html'));
 }
 function csvCell(v: string) { return `"${v.replaceAll('"', '""')}"`; }
+const transferCore = (value: TransferPackageCore): TransferPackageCore => ({ format: value.format, version: value.version, packageId: value.packageId, exportedAt: value.exportedAt, sourceDate: value.sourceDate, data: value.data });
+const transferChecksum = (value: TransferPackageCore) => createHash('sha256').update(JSON.stringify(transferCore(value))).digest('hex');
 app.whenReady().then(() => {
   ipcMain.handle('data:load', async (e) => { trusted(e); const store = await loadStore(); syncAutomationRuntime(store.settings.automation.enabled); return store; });
   ipcMain.handle('data:save', async (e, store: Store) => { trusted(e); syncAutomationRuntime(store.settings.automation.enabled); await saveStore(store); });
+  ipcMain.handle('data:backup', async (e, store: Store) => {
+    trusted(e);
+    const folder = join(app.getPath('documents'), 'Football Bet POS Backups');
+    await mkdir(folder, { recursive: true });
+    const stamp = new Date().toISOString().replace(/[:.]/g, '-');
+    const target = join(folder, `football-pos-before-import-${stamp}.json`);
+    await writeFile(target, JSON.stringify(store, null, 2), 'utf8');
+    return target;
+  });
+  ipcMain.handle('transfer:export', async (e, payload: TransferPackageCore) => {
+    trusted(e);
+    if (payload.format !== 'football-bet-pos-transfer' || payload.version !== 1) throw new Error('Transfer format မမှန်ပါ။');
+    const packageData: TransferPackage = { ...transferCore(payload), checksum: transferChecksum(payload) };
+    const time = new Date().toLocaleTimeString('en-GB', { timeZone: 'Asia/Yangon', hour: '2-digit', minute: '2-digit' }).replace(':', '');
+    const target = await dialog.showSaveDialog({ title: 'Export POS Transfer File', defaultPath: `football-transfer-${payload.sourceDate}-${time}.fbpos`, filters: [{ name: 'Football POS Transfer', extensions: ['fbpos'] }] });
+    if (target.canceled || !target.filePath) return false;
+    await writeFile(target.filePath, JSON.stringify(packageData, null, 2), 'utf8');
+    return true;
+  });
+  ipcMain.handle('transfer:import', async (e) => {
+    trusted(e);
+    const selected = await dialog.showOpenDialog({ title: 'Import POS Transfer File', properties: ['openFile'], filters: [{ name: 'Football POS Transfer', extensions: ['fbpos'] }] });
+    if (selected.canceled || !selected.filePaths[0]) return null;
+    const target = selected.filePaths[0];
+    if ((await stat(target)).size > 50 * 1024 * 1024) throw new Error('Transfer file သည် 50 MB ထက်ကျော်နေပါသည်။');
+    const parsed = JSON.parse(await readFile(target, 'utf8')) as TransferPackage;
+    if (parsed.format !== 'football-bet-pos-transfer' || parsed.version !== 1 || !parsed.data || !Array.isArray(parsed.data.teams) || !Array.isArray(parsed.data.matches) || !Array.isArray(parsed.data.bets)) throw new Error('Football POS transfer file မမှန်ပါ။');
+    if (!parsed.packageId || parsed.checksum !== transferChecksum(parsed)) throw new Error('Transfer file checksum မကိုက်ညီပါ။ File ပျက်နေခြင်း သို့မဟုတ် ပြင်ထားခြင်းဖြစ်နိုင်ပါသည်။');
+    return parsed;
+  });
   ipcMain.handle('team-voice:save', async (e, teamId: string, audio: Uint8Array) => {
     trusted(e);
     const bytes = Buffer.from(audio);
@@ -276,7 +355,8 @@ app.whenReady().then(() => {
     trusted(e);
     const folder = join(app.getPath('documents'), 'Football Bet POS Reports');
     await mkdir(folder, { recursive: true });
-    const target = join(folder, `${title.replace(/[^a-zA-Z0-9._-]+/g, '-')}.pdf`);
+    const safeTitle = title.replace(/[^\p{L}\p{N}._-]+/gu, '-').replace(/^-+|-+$/g, '') || 'football-settlement';
+    const target = join(folder, `${safeTitle}.pdf`);
     await renderPdf(target, html); return target;
   });
   ipcMain.handle('api-football:has-key', (e) => { trusted(e); return existsSync(apiKeyPath()); });
