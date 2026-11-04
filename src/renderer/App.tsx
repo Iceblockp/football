@@ -309,7 +309,7 @@ export function App() {
   const [apiKeyInput, setApiKeyInput] = useState(''); const [apiKeyConfigured, setApiKeyConfigured] = useState(false); const [apiMessage, setApiMessage] = useState(''); const [automationBusy, setAutomationBusy] = useState(false); const [nextAutomationCheckAt, setNextAutomationCheckAt] = useState<number | null>(null); const [automationClock, setAutomationClock] = useState(Date.now()); const [viberSendBusy, setViberSendBusy] = useState(false);
   const [fixturePicker, setFixturePicker] = useState<{ match: Match; fixtures: ApiFixture[]; searchDate: string } | null>(null); const [fixtureFilter, setFixtureFilter] = useState(''); const [fixturePickerLoading, setFixturePickerLoading] = useState(false);
   const [bulkOpen, setBulkOpen] = useState(false); const [bulkJson, setBulkJson] = useState(''); const [bulkPreview, setBulkPreview] = useState<BulkPreview | null>(null); const [bulkError, setBulkError] = useState(''); const [bulkApiQueue, setBulkApiQueue] = useState<string[]>([]); const [bulkApiBusy, setBulkApiBusy] = useState(false);
-  const [transferPreview, setTransferPreview] = useState<TransferPreview | null>(null); const [transferBusy, setTransferBusy] = useState(false);
+  const [transferPreview, setTransferPreview] = useState<TransferPreview | null>(null); const [transferBusy, setTransferBusy] = useState(false); const [teamShareBusy, setTeamShareBusy] = useState(false);
   const fixtureDateCache = useRef(new Map<string, ApiFixture[]>());
   const checkApiResultsRef = useRef<(manual?: boolean) => Promise<void>>(async () => undefined);
   const mediaRecorderRef = useRef<MediaRecorder | null>(null);
@@ -940,6 +940,54 @@ export function App() {
     const rightName = match.apiSidesReversed ? match.apiHome : match.apiAway;
     return knownTeams.map(team => team.name === match.home && !team.apiName ? { ...team, apiName: leftName } : team.name === match.away && !team.apiName ? { ...team, apiName: rightName } : team);
   }, teamList);
+  const matchTeam = (match: Match, name: string) => allTeams.find(team => team.bookmaker === match.bookmaker && team.name === name);
+  const sameTeamIdentity = (left: Team | undefined, leftName: string, right: Team | undefined, rightName: string) => {
+    if (left && right && (left.sourceId ?? left.id) === (right.sourceId ?? right.id)) return true;
+    if (left?.apiTeamId && right?.apiTeamId) return left.apiTeamId === right.apiTeamId;
+    return normalizeTeamName(leftName) === normalizeTeamName(rightName);
+  };
+  const linkedReferenceForMatch = (target: Match) => {
+    const targetHome = matchTeam(target, target.home); const targetAway = matchTeam(target, target.away);
+    const targetTime = new Date(target.kickoffAt ?? kickoffIso(target.date, target.time, target.time < '06:00')).valueOf();
+    const candidates = matches.flatMap(reference => {
+      if (reference.bookmaker === target.bookmaker || reference.date !== target.date || !reference.apiFixtureId || !reference.apiHome || !reference.apiAway) return [];
+      const referenceTime = new Date(reference.kickoffAt ?? kickoffIso(reference.date, reference.time, reference.time < '06:00')).valueOf();
+      if (Math.abs(referenceTime - targetTime) > 6 * 60 * 60 * 1_000) return [];
+      const referenceHome = matchTeam(reference, reference.home); const referenceAway = matchTeam(reference, reference.away);
+      const direct = sameTeamIdentity(targetHome, target.home, referenceHome, reference.home) && sameTeamIdentity(targetAway, target.away, referenceAway, reference.away);
+      const swapped = sameTeamIdentity(targetHome, target.home, referenceAway, reference.away) && sameTeamIdentity(targetAway, target.away, referenceHome, reference.home);
+      return direct || swapped ? [{ reference, swapped }] : [];
+    });
+    const fixtureIds = new Set(candidates.map(item => item.reference.apiFixtureId));
+    return fixtureIds.size === 1 ? candidates[0] : null;
+  };
+  const matchWithReference = (match: Match, reference: Match, swapped: boolean): Match => ({
+    ...match,
+    time: reference.time,
+    kickoffAt: reference.kickoffAt,
+    apiFixtureId: reference.apiFixtureId,
+    apiHome: reference.apiHome,
+    apiAway: reference.apiAway,
+    apiSidesReversed: swapped ? !Boolean(reference.apiSidesReversed) : Boolean(reference.apiSidesReversed),
+    apiStatus: reference.apiStatus,
+    apiLeague: reference.apiLeague,
+    resultCheckedAt: new Date().toISOString(),
+    homeScore: null,
+    awayScore: null,
+    resultSource: undefined,
+  });
+  const learnReferenceTeams = (teamList: Team[], target: Match, reference: Match, swapped: boolean) => {
+    const referenceHome = matchTeam(reference, reference.home); const referenceAway = matchTeam(reference, reference.away);
+    const referenceHomeApi = reference.apiSidesReversed ? reference.apiAway : reference.apiHome;
+    const referenceAwayApi = reference.apiSidesReversed ? reference.apiHome : reference.apiAway;
+    const targetHomeSource = swapped ? { team: referenceAway, apiName: referenceAwayApi } : { team: referenceHome, apiName: referenceHomeApi };
+    const targetAwaySource = swapped ? { team: referenceHome, apiName: referenceHomeApi } : { team: referenceAway, apiName: referenceAwayApi };
+    return teamList.map(team => {
+      const source = team.name === target.home ? targetHomeSource : team.name === target.away ? targetAwaySource : null;
+      if (!source) return team;
+      return { ...team, apiTeamId: team.apiTeamId ?? source.team?.apiTeamId, apiName: team.apiName ?? source.team?.apiName ?? source.apiName };
+    });
+  };
   const linkApiFixture = async (match: Match) => {
     if (!apiKeyConfigured) return flash('Settings တွင် API-Football key အရင်ထည့်ပါ။');
     try {
@@ -996,26 +1044,48 @@ export function App() {
   };
   const bulkLinkApiMatches = async () => {
     if (!store || bulkApiBusy) return;
-    if (!apiKeyConfigured) return flash('Settings တွင် API-Football key အရင်ထည့်ပါ။');
     const targets = dayMatches.filter(match => !match.apiFixtureId);
     if (!targets.length) return flash('ဤစာရင်းရက်ရှိ match အားလုံး API ချိတ်ပြီးသားဖြစ်သည်။');
     setBulkApiBusy(true);
     try {
-      const dates = [...new Set(targets.map(match => kickoffLocalDate(match.kickoffAt) || (match.time < '06:00' ? nextDate(match.date) : match.date)))];
-      const fixturesByDate = new Map<string, ApiFixture[]>();
-      for (const date of dates) fixturesByDate.set(date, await loadFixtureDate(date));
       let nextTeams = learnExistingApiNames(teams);
-      let autoCount = 0;
-      const unresolved: string[] = [];
+      let referenceCount = 0;
       const usedFixtureIds = new Set(matches
         .filter(match => match.apiFixtureId && match.date === activeDate && match.bookmaker === activeBookmaker)
         .map(match => match.apiFixtureId as number));
-      const nextMatches = matches.map(match => {
+      let nextMatches = matches.map(match => {
         if (!targets.some(target => target.id === match.id)) return match;
+        const linkedReference = linkedReferenceForMatch(match);
+        const fixtureId = linkedReference?.reference.apiFixtureId;
+        if (!linkedReference || !fixtureId || usedFixtureIds.has(fixtureId)) return match;
+        usedFixtureIds.add(fixtureId); referenceCount += 1;
+        nextTeams = learnReferenceTeams(nextTeams, match, linkedReference.reference, linkedReference.swapped);
+        return matchWithReference(match, linkedReference.reference, linkedReference.swapped);
+      });
+      let remaining = targets.filter(target => !nextMatches.find(match => match.id === target.id)?.apiFixtureId);
+      if (referenceCount) await save({ ...store, teams: withActiveTeams(nextTeams), matches: nextMatches });
+      if (!remaining.length) {
+        setBulkApiQueue([]);
+        flash(`အခြား channel reference ဖြင့် Match ${referenceCount} ပွဲလုံး API auto-link ပြီးပါပြီ။ API request မသုံးပါ။`);
+        return;
+      }
+      if (!apiKeyConfigured) {
+        setBulkApiQueue(remaining.map(match => match.id));
+        flash(`${referenceCount ? `အခြား channel reference ဖြင့် ${referenceCount} ပွဲ ချိတ်ပြီးပါပြီ။ ` : ''}ကျန် ${remaining.length} ပွဲအတွက် Settings တွင် API-Football key ထည့်ပါ။`);
+        return;
+      }
+      const dates = [...new Set(remaining.map(match => kickoffLocalDate(match.kickoffAt) || (match.time < '06:00' ? nextDate(match.date) : match.date)))];
+      const fixturesByDate = new Map<string, ApiFixture[]>();
+      for (const date of dates) fixturesByDate.set(date, await loadFixtureDate(date));
+      let apiCount = 0;
+      const unresolved: string[] = [];
+      const remainingIds = new Set(remaining.map(match => match.id));
+      nextMatches = nextMatches.map(match => {
+        if (!remainingIds.has(match.id)) return match;
         const date = kickoffLocalDate(match.kickoffAt) || (match.time < '06:00' ? nextDate(match.date) : match.date);
         const mapped = mappedFixtureForMatch(match, fixturesByDate.get(date) ?? [], nextTeams);
         if (!mapped || usedFixtureIds.has(mapped.fixture.id)) { unresolved.push(match.id); return match; }
-        autoCount += 1;
+        apiCount += 1;
         usedFixtureIds.add(mapped.fixture.id);
         nextTeams = learnApiTeams(nextTeams, match, mapped.fixture, mapped.reversed);
         return matchWithFixture(match, mapped.fixture, mapped.reversed);
@@ -1025,8 +1095,8 @@ export function App() {
       if (unresolved.length) {
         const first = nextMatches.find(match => match.id === unresolved[0]);
         if (first) await openFixtureForMatch(first);
-        flash(`${autoCount} ပွဲ auto-link ပြီးပါပြီ။ မသိသေးသော ${unresolved.length} ပွဲကို တစ်ပွဲစီရွေးပါ။`);
-      } else flash(`Match ${autoCount} ပွဲလုံး API auto-link ပြီးပါပြီ။`);
+        flash(`${referenceCount ? `အခြား channel reference ${referenceCount} ပွဲ · ` : ''}API search ${apiCount} ပွဲ auto-link ပြီးပါပြီ။ မသိသေးသော ${unresolved.length} ပွဲကို တစ်ပွဲစီရွေးပါ။`);
+      } else flash(`Match ${referenceCount + apiCount} ပွဲလုံး auto-link ပြီးပါပြီ${referenceCount ? ` · အခြား channel reference ${referenceCount} ပွဲ` : ''}။`);
     } catch (error) { flash(error instanceof Error ? error.message : 'API fixtures များကို မချိတ်နိုင်ပါ။'); }
     finally { setBulkApiBusy(false); }
   };
@@ -1226,6 +1296,49 @@ export function App() {
     let candidate = base; let suffix = 2;
     while (used.has(candidate)) candidate = `${base}${suffix++}`;
     used.add(candidate); return candidate;
+  };
+  const shareTeamsToChannel = async () => {
+    if (!store || teamShareBusy) return;
+    const destination = channels.find(channel => channel.id === transferDestination && channel.enabled);
+    if (!destination || destination.id === activeBookmaker) return flash('Team ပို့မည့် အခြား channel ကိုရွေးပါ။');
+    if (!teams.length) return flash(`${activeChannel?.name ?? activeBookmaker} တွင် share လုပ်ရန် Team မရှိပါ။`);
+    if (!await askConfirm(`${activeChannel?.name ?? activeBookmaker} ရှိ Team ${teams.length} သင်းကို ${destination.name} သို့ share လုပ်မလား?\n\nရှိပြီးသား Team ကို မထပ်ထည့်ပါ။ API mapping၊ English voice name နှင့် ဖမ်းထားသော team voice ကိုပါ ကူးပေးမည်။`)) return;
+    setTeamShareBusy(true);
+    try {
+      let nextTeams = [...allTeams];
+      const destinationTeams = () => nextTeams.filter(team => team.bookmaker === destination.id);
+      const usedCodes = new Set(destinationTeams().map(team => team.code.toLowerCase()));
+      let created = 0; let updated = 0; let copiedVoices = 0;
+      for (const source of teams) {
+        let target = destinationTeams().find(team =>
+          (team.sourceId ?? team.id) === (source.sourceId ?? source.id)
+          || Boolean(source.apiTeamId && team.apiTeamId === source.apiTeamId)
+          || normalizeTeamName(team.name) === normalizeTeamName(source.name));
+        if (!target) {
+          const id = uid();
+          const voiceCopied = source.hasVoiceClip ? await window.footballPos.teamVoice.copy(source.id, id) : false;
+          target = {
+            ...structuredClone(source), id, sourceId: source.sourceId ?? source.id, bookmaker: destination.id,
+            code: uniqueImportCode(source.code, usedCodes), hasVoiceClip: voiceCopied,
+          };
+          nextTeams.push(target); created += 1; copiedVoices += voiceCopied ? 1 : 0;
+          continue;
+        }
+        let changed = false;
+        let nextTarget = target;
+        if (!nextTarget.sourceId) { nextTarget = { ...nextTarget, sourceId: source.sourceId ?? source.id }; changed = true; }
+        if (!nextTarget.apiTeamId && source.apiTeamId) { nextTarget = { ...nextTarget, apiTeamId: source.apiTeamId }; changed = true; }
+        if (!nextTarget.apiName && source.apiName) { nextTarget = { ...nextTarget, apiName: source.apiName }; changed = true; }
+        if (!nextTarget.voiceName && source.voiceName) { nextTarget = { ...nextTarget, voiceName: source.voiceName }; changed = true; }
+        if (!nextTarget.hasVoiceClip && source.hasVoiceClip && await window.footballPos.teamVoice.copy(source.id, nextTarget.id)) {
+          nextTarget = { ...nextTarget, hasVoiceClip: true }; changed = true; copiedVoices += 1;
+        }
+        if (changed) { nextTeams = nextTeams.map(team => team.id === nextTarget.id ? nextTarget : team); updated += 1; }
+      }
+      await save({ ...store, teams: nextTeams });
+      flash(`${destination.name} သို့ Team ${created} သင်းအသစ်ထည့်ပြီး ${updated} သင်း update လုပ်ပါပြီ · Voice ${copiedVoices} ခုကူးပြီးပါပြီ။`);
+    } catch (error) { flash(error instanceof Error ? error.message : 'Team များကို share မလုပ်နိုင်ပါ။'); }
+    finally { setTeamShareBusy(false); }
   };
   const chooseTransferFile = async () => {
     if (!store || transferBusy) return;
@@ -1732,7 +1845,7 @@ export function App() {
       <p className="muted">JSON ၏ left team ကို Body base team အဖြစ်ယူသည်။ <code>nextDay: true</code> သည် accounting date နောက်တစ်နေ့ kickoff ဖြစ်သော်လည်း report ကို {activeDate} ထဲမှာပဲထားမည်။</p>
       <button type="button" className="secondary" onClick={() => { setBulkOpen(open => !open); setBulkError(''); }}>{bulkOpen ? 'JSON Import ပိတ်မည်' : '⚡ JSON Import ဖွင့်မည်'}</button>
       <button type="button" disabled={bulkApiBusy || dayMatches.length === 0} onClick={() => void bulkLinkApiMatches()}>{bulkApiBusy ? 'API fixtures ရှာနေသည်…' : `API မချိတ်ရသေးသော Match အားလုံးချိတ်မည်`}</button>
-      <p className="muted">Actual kickoff date တစ်ရက်လျှင် API request တစ်ခုသာသုံးပြီး cache ထားမည်။ Team mapping သိပြီးသားပွဲကို auto-link လုပ်ပြီး မသိသေးသောပွဲများကို တစ်ပွဲစီရွေးခိုင်းမည်။</p>
+      <p className="muted">တူညီသော accounting date ရှိ အခြား channel တွင် ချိတ်ပြီးသား match ကို အရင် reference ယူမည်။ မတွေ့မှသာ actual kickoff date အလိုက် API request သုံးပြီး၊ မသိသေးသောပွဲများကို တစ်ပွဲစီရွေးခိုင်းမည်။</p>
       {bulkOpen && <div className="bulk-import-box">
         <textarea value={bulkJson} onChange={e => { setBulkJson(e.target.value); setBulkPreview(null); setBulkError(''); }} spellCheck={false} placeholder={'[\n  {\n    "nextDay": true,\n    "time": "01:45",\n    "teams": ["လိုင်ယွန်", "ပဲလေ့စ်"],\n    "bd": "D",\n    "ou": "3D"\n  }\n]'}/>
         <div className="bulk-actions"><button type="button" className="secondary" onClick={() => { setBulkJson('[\n  {\n    "nextDay": true,\n    "time": "01:45",\n    "teams": ["လိုင်ယွန်", "ပဲလေ့စ်"],\n    "bd": "D",\n    "ou": "3D"\n  },\n  {\n    "nextDay": true,\n    "time": "01:45",\n    "teams": ["လေဗာကူဆင်", "လက်ပေါ့နန်"],\n    "bd": "1-50",\n    "ou": "4+90"\n  }\n]'); setBulkPreview(null); setBulkError(''); }}>နမူနာထည့်မည်</button><button type="button" onClick={parseBulkMatches}>JSON စစ်မည်</button></div>
@@ -1748,6 +1861,7 @@ export function App() {
     {settingsTab === 'matches' && <article className="card team-card">
       <div className="team-card-heading"><h2>{activeChannel?.name ?? activeBookmaker} Team list · Quick Code · Voice</h2><button type="button" className="danger-button" disabled={teams.length === 0 || deletingAllTeams} onClick={() => void deleteAllTeams()}>{deletingAllTeams ? 'ဖျက်နေသည်…' : `Team အားလုံးဖျက်မည် (${teams.length})`}</button></div>
       <p className="muted">မြန်မာအသင်းအမည်နှင့် Quick Entry short code သတ်မှတ်ပါ။ Team name အသံကိုဖမ်းနိုင်ပြီး English voice name သည် မထည့်လည်းရပါသည်။</p>
+      <div className="team-share-bar"><label>Team များ share မည့် Channel<select value={transferDestination} onChange={e => setTransferDestination(e.target.value)}>{otherChannels.map(channel => <option key={channel.id} value={channel.id}>{channel.name}</option>)}</select></label><button type="button" className="secondary" disabled={teamShareBusy || teams.length === 0 || !transferDestination} onClick={() => void shareTeamsToChannel()}>{teamShareBusy ? 'Team များကူးနေသည်…' : 'Team + Voice များ Share မည်'}</button><small>ရှိပြီးသား Team ကို မထပ်ထည့်ဘဲ voice နှင့် API mapping လိုအပ်တာသာ ဖြည့်ပေးမည်။</small></div>
       <form className="team-form" onSubmit={addTeam}>
         <label>Team name<input value={teamForm.name} onChange={e => setTeamForm({ ...teamForm, name: e.target.value })} placeholder="မန်ချက်စတာ ယူနိုက်တက်"/></label>
         <label>Short code<input value={teamForm.code} onChange={e => setTeamForm({ ...teamForm, code: e.target.value })} placeholder="mu" maxLength={12}/></label>

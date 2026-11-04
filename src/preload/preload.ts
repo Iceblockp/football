@@ -27,6 +27,7 @@ const api: DesktopApi = {
   teamVoice: {
     save: (teamId, audio) => ipcRenderer.invoke('team-voice:save', teamId, audio),
     load: (teamId) => ipcRenderer.invoke('team-voice:load', teamId),
+    copy: (sourceTeamId, targetTeamId) => ipcRenderer.invoke('team-voice:copy', sourceTeamId, targetTeamId),
     remove: (teamId) => ipcRenderer.invoke('team-voice:remove', teamId),
   },
   commonVoice: {

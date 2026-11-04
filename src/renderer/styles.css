@@ -155,6 +155,7 @@ main>.card{min-height:0;overflow:auto}
 :root[data-theme="dark"] .match-list-toolbar{border-color:#33453a}:root[data-theme="dark"] .match-list-toolbar>span{color:#9bada0}
 .team-form{grid-template-columns:1.2fr .55fr 1fr auto}
 .team-card-heading{display:flex;align-items:center;justify-content:space-between;gap:12px;margin-bottom:2px}.team-card-heading h2{margin:0}.danger-button{margin:0;background:#a13c35;color:#fff;white-space:nowrap}.danger-button:hover{background:#842f2a}.danger-button:disabled{opacity:.5;cursor:not-allowed}
+.team-share-bar{display:grid;grid-template-columns:minmax(220px,360px) auto 1fr;align-items:end;gap:9px;margin:-4px 0 14px;padding:11px;border:1px solid #c9dec2;border-radius:9px;background:#f5f9f1}.team-share-bar button{margin:0;white-space:nowrap}.team-share-bar small{align-self:center;color:#617464;font-size:11px;line-height:1.4}:root[data-theme="dark"] .team-share-bar{background:#18221b;border-color:#405447}:root[data-theme="dark"] .team-share-bar small{color:#9bada0}
 .team-voice-name{color:#5f7464;font-size:11px;white-space:nowrap}
 .team-api-name{color:#2d6b43;font-size:10px;white-space:nowrap}
 .team-code-edit input:last-of-type{width:180px}
@@ -162,4 +163,5 @@ main>.card{min-height:0;overflow:auto}
 :root[data-theme="dark"] .team-voice-name{color:#9bada0}
 :root[data-theme="dark"] .team-api-name{color:#8bc49a}
 @media(max-width:850px){.team-form{grid-template-columns:1fr 1fr}.team-form button{grid-column:1/-1}.team-voice-actions{flex-basis:100%;margin-left:0}}
+@media(max-width:850px){.team-share-bar{grid-template-columns:1fr}.team-share-bar small{align-self:auto}}
 @media(max-width:600px){.team-card-heading{align-items:flex-start;flex-direction:column}}

@@ -317,6 +317,14 @@ app.whenReady().then(() => {
     try { return new Uint8Array(await readFile(teamVoicePath(teamId))); }
     catch { return null; }
   });
+  ipcMain.handle('team-voice:copy', async (e, sourceTeamId: string, targetTeamId: string) => {
+    trusted(e);
+    try {
+      await mkdir(teamVoiceFolder(), { recursive: true });
+      await copyFile(teamVoicePath(sourceTeamId), teamVoicePath(targetTeamId));
+      return true;
+    } catch { return false; }
+  });
   ipcMain.handle('team-voice:remove', async (e, teamId: string) => {
     trusted(e);
     await rm(teamVoicePath(teamId), { force: true });

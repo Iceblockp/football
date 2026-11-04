@@ -161,6 +161,7 @@ export interface DesktopApi {
   teamVoice: {
     save: (teamId: string, audio: Uint8Array) => Promise<boolean>;
     load: (teamId: string) => Promise<Uint8Array | null>;
+    copy: (sourceTeamId: string, targetTeamId: string) => Promise<boolean>;
     remove: (teamId: string) => Promise<boolean>;
   };
   commonVoice: {
