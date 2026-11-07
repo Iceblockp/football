@@ -3,7 +3,7 @@ import { execFile } from 'node:child_process';
 import { createHash } from 'node:crypto';
 import { copyFile, mkdir, readFile, rm, stat, writeFile } from 'node:fs/promises';
 import { existsSync } from 'node:fs';
-import { join, resolve } from 'node:path';
+import { isAbsolute, join, relative, resolve } from 'node:path';
 import { promisify } from 'node:util';
 import type { ApiFixture, BookmakerSettings, Channel, CommonVoiceKey, Store, Team, TransferPackage, TransferPackageCore } from '../shared/models';
 
@@ -103,7 +103,7 @@ async function loadStore(): Promise<Store> {
 async function saveStore(store: Store) { await mkdir(app.getPath('userData'), { recursive: true }); await writeFile(dataPath(), JSON.stringify(store, null, 2), 'utf8'); }
 function syncAutomationRuntime(enabled: boolean) {
   // Viber delivery drives the desktop UI, so the display must remain awake as
-  // well as the Electron process. macOS restores its normal sleep policy when
+  // well as the Electron process. The OS restores its normal sleep policy when
   // this blocker is stopped or the app quits.
   if (enabled && automationPowerBlocker === null) automationPowerBlocker = powerSaveBlocker.start('prevent-display-sleep');
   if (!enabled && automationPowerBlocker !== null) { powerSaveBlocker.stop(automationPowerBlocker); automationPowerBlocker = null; }
@@ -196,10 +196,265 @@ function run(argv) {
   delay(0.05);
   $.CGEventPost($.kCGHIDEventTap, up);
 }`;
+const windowsViberAutomationScript = String.raw`
+$ErrorActionPreference = 'Stop'
+Add-Type -AssemblyName UIAutomationClient
+Add-Type -AssemblyName UIAutomationTypes
+Add-Type -AssemblyName System.Windows.Forms
+Add-Type -TypeDefinition @'
+using System;
+using System.Runtime.InteropServices;
+public static class FootballPosNative {
+  [DllImport("user32.dll")] public static extern bool SetForegroundWindow(IntPtr hWnd);
+  [DllImport("user32.dll")] public static extern bool ShowWindow(IntPtr hWnd, int nCmdShow);
+  [DllImport("user32.dll")] public static extern bool SetCursorPos(int X, int Y);
+  [DllImport("user32.dll")] public static extern void mouse_event(uint flags, uint dx, uint dy, uint data, UIntPtr extraInfo);
+}
+'@
+
+function Click-Point([double]$x, [double]$y) {
+  [FootballPosNative]::SetCursorPos([int]$x, [int]$y) | Out-Null
+  Start-Sleep -Milliseconds 80
+  [FootballPosNative]::mouse_event(0x0002, 0, 0, 0, [UIntPtr]::Zero)
+  [FootballPosNative]::mouse_event(0x0004, 0, 0, 0, [UIntPtr]::Zero)
+}
+
+function Get-ViberProcess {
+  $process = Get-Process -Name Viber -ErrorAction SilentlyContinue | Where-Object { $_.MainWindowHandle -ne 0 } | Select-Object -First 1
+  if ($process) { return $process }
+  $programFilesX86 = [Environment]::GetEnvironmentVariable('ProgramFiles(x86)')
+  $paths = @(
+    (Join-Path $env:LOCALAPPDATA 'Viber\Viber.exe'),
+    (Join-Path $env:LOCALAPPDATA 'Programs\Viber\Viber.exe'),
+    (Join-Path $env:ProgramFiles 'Viber\Viber.exe')
+  ) | Where-Object { $_ -and (Test-Path $_) }
+  if ($programFilesX86) {
+    $x86Path = Join-Path $programFilesX86 'Viber\Viber.exe'
+    if (Test-Path $x86Path) { $paths += $x86Path }
+  }
+  if ($paths.Count) { Start-Process -FilePath $paths[0] | Out-Null }
+  else {
+    try { Start-Process 'viber://' | Out-Null }
+    catch { throw 'Viber Desktop ကို Windows တွင် မတွေ့ပါ။ Viber ကို install/open လုပ်ထားပါ။' }
+  }
+  for ($i = 0; $i -lt 40; $i++) {
+    Start-Sleep -Milliseconds 250
+    $process = Get-Process -Name Viber -ErrorAction SilentlyContinue | Where-Object { $_.MainWindowHandle -ne 0 } | Select-Object -First 1
+    if ($process) { return $process }
+  }
+  throw 'Viber window မပွင့်လာပါ။'
+}
+
+function Get-Rectangle($element) {
+  try {
+    $rect = $element.Current.BoundingRectangle
+    if ($rect.Width -gt 1 -and $rect.Height -gt 1) { return $rect }
+  } catch {}
+  return $null
+}
+
+function Click-Element($element) {
+  $rect = Get-Rectangle $element
+  if (-not $rect) { throw 'Viber UI element နေရာကို မသတ်မှတ်နိုင်ပါ။' }
+  Click-Point ($rect.Left + ($rect.Width / 2)) ($rect.Top + ($rect.Height / 2))
+}
+
+function Find-Descendants($root, $controlType) {
+  $condition = New-Object System.Windows.Automation.PropertyCondition(
+    [System.Windows.Automation.AutomationElement]::ControlTypeProperty,
+    $controlType
+  )
+  return $root.FindAll([System.Windows.Automation.TreeScope]::Descendants, $condition)
+}
+
+function Select-ViberGroup($process, [string]$groupName) {
+  $process.Refresh()
+  [FootballPosNative]::ShowWindow($process.MainWindowHandle, 9) | Out-Null
+  [FootballPosNative]::SetForegroundWindow($process.MainWindowHandle) | Out-Null
+  Start-Sleep -Milliseconds 500
+  $root = [System.Windows.Automation.AutomationElement]::FromHandle($process.MainWindowHandle)
+  if (-not $root) { throw 'Viber window ကို Windows UI Automation ဖြင့် မဖတ်နိုင်ပါ။' }
+  $windowRect = Get-Rectangle $root
+  if (-not $windowRect) { throw 'Viber window နေရာကို မသတ်မှတ်နိုင်ပါ။' }
+
+  $searchCandidates = @()
+  foreach ($edit in (Find-Descendants $root ([System.Windows.Automation.ControlType]::Edit))) {
+    $rect = Get-Rectangle $edit
+    if (-not $rect) { continue }
+    $label = (($edit.Current.Name + ' ' + $edit.Current.AutomationId + ' ' + $edit.Current.HelpText)).ToLowerInvariant()
+    $score = 0
+    if ($label -match 'search') { $score += 100 }
+    if ($rect.Left -lt ($windowRect.Left + $windowRect.Width * 0.45)) { $score += 20 }
+    if ($rect.Top -lt ($windowRect.Top + $windowRect.Height * 0.30)) { $score += 20 }
+    if ($score -gt 20) { $searchCandidates += [pscustomobject]@{ Element = $edit; Score = $score; Top = $rect.Top } }
+  }
+  $search = $searchCandidates | Sort-Object Score -Descending | Select-Object -First 1
+  if ($search) { Click-Element $search.Element }
+  else {
+    Click-Point ($windowRect.Left + [Math]::Min(180, $windowRect.Width * 0.16)) ($windowRect.Top + 35)
+    Start-Sleep -Milliseconds 150
+    $focused = [System.Windows.Automation.AutomationElement]::FocusedElement
+    $focusedRect = Get-Rectangle $focused
+    if (-not $focusedRect -or $focusedRect.Left -gt ($windowRect.Left + $windowRect.Width * 0.48) -or $focusedRect.Top -gt ($windowRect.Top + $windowRect.Height * 0.30)) {
+      throw 'Viber conversation search field ကို focus မရပါ။ PDF မပို့ပါ။'
+    }
+  }
+  Start-Sleep -Milliseconds 150
+  [System.Windows.Forms.SendKeys]::SendWait('^a')
+  [System.Windows.Forms.Clipboard]::SetText($groupName)
+  [System.Windows.Forms.SendKeys]::SendWait('^v')
+  Start-Sleep -Milliseconds 1400
+
+  $nameCondition = New-Object System.Windows.Automation.PropertyCondition(
+    [System.Windows.Automation.AutomationElement]::NameProperty,
+    $groupName
+  )
+  $exact = $root.FindAll([System.Windows.Automation.TreeScope]::Descendants, $nameCondition)
+  $rows = @()
+  foreach ($item in $exact) {
+    $rect = Get-Rectangle $item
+    if (-not $rect) { continue }
+    if ($rect.Left -lt ($windowRect.Left + $windowRect.Width * 0.48) -and $rect.Top -gt ($windowRect.Top + $windowRect.Height * 0.08)) {
+      $rows += [pscustomobject]@{ Element = $item; Top = $rect.Top; Width = $rect.Width }
+    }
+  }
+  $row = $rows | Sort-Object Top | Select-Object -First 1
+  if (-not $row) { throw ('Viber group “' + $groupName + '” အတိအကျကို search result တွင် မတွေ့ပါ။ PDF မပို့ပါ။') }
+  Click-Element $row.Element
+  Start-Sleep -Milliseconds 900
+  $selected = $false
+  foreach ($item in $root.FindAll([System.Windows.Automation.TreeScope]::Descendants, $nameCondition)) {
+    $rect = Get-Rectangle $item
+    if ($rect -and $rect.Left -gt ($windowRect.Left + $windowRect.Width * 0.18) -and $rect.Top -lt ($windowRect.Top + $windowRect.Height * 0.28)) {
+      $selected = $true
+      break
+    }
+  }
+  if (-not $selected) { throw ('Viber group “' + $groupName + '” ကိုရွေးထားကြောင်း အတည်မပြုနိုင်ပါ။ PDF မပို့ပါ။') }
+  return [pscustomobject]@{ Root = $root; WindowRect = $windowRect }
+}
+
+function Open-AttachmentDialog($context) {
+  $root = $context.Root
+  $windowRect = $context.WindowRect
+  $composer = $null
+  foreach ($edit in (Find-Descendants $root ([System.Windows.Automation.ControlType]::Edit))) {
+    $rect = Get-Rectangle $edit
+    if ($rect -and $rect.Left -gt ($windowRect.Left + $windowRect.Width * 0.20) -and $rect.Top -gt ($windowRect.Top + $windowRect.Height * 0.65) -and $rect.Width -gt 100) {
+      if (-not $composer -or $rect.Top -gt $composer.Rect.Top) { $composer = [pscustomobject]@{ Element = $edit; Rect = $rect } }
+    }
+  }
+
+  $attachment = $null
+  $attachmentLabel = ''
+  foreach ($button in (Find-Descendants $root ([System.Windows.Automation.ControlType]::Button))) {
+    $rect = Get-Rectangle $button
+    if (-not $rect) { continue }
+    $label = (($button.Current.Name + ' ' + $button.Current.AutomationId + ' ' + $button.Current.HelpText)).ToLowerInvariant()
+    if ($label -match 'attach|send file|file|attachment' -and $rect.Top -gt ($windowRect.Top + $windowRect.Height * 0.60)) {
+      $attachment = $button
+      $attachmentLabel = $label
+      break
+    }
+  }
+  if ($attachment) { Click-Element $attachment }
+  elseif ($composer) { Click-Point ($composer.Rect.Left - 28) ($composer.Rect.Top + $composer.Rect.Height / 2) }
+  else { Click-Point ($windowRect.Left + [Math]::Max(330, $windowRect.Width * 0.22)) ($windowRect.Bottom - 34) }
+  Start-Sleep -Milliseconds 350
+  if ($attachmentLabel -notmatch 'file') {
+    foreach ($button in (Find-Descendants $root ([System.Windows.Automation.ControlType]::Button))) {
+      $rect = Get-Rectangle $button
+      if (-not $rect) { continue }
+      $label = (($button.Current.Name + ' ' + $button.Current.AutomationId + ' ' + $button.Current.HelpText)).ToLowerInvariant()
+      if ($label -match 'send file|file' -and $rect.Top -gt ($windowRect.Top + $windowRect.Height * 0.45)) {
+        Click-Element $button
+        break
+      }
+    }
+  }
+}
+
+function Wait-FileDialog($processId) {
+  $desktop = [System.Windows.Automation.AutomationElement]::RootElement
+  $windowCondition = New-Object System.Windows.Automation.PropertyCondition(
+    [System.Windows.Automation.AutomationElement]::ControlTypeProperty,
+    [System.Windows.Automation.ControlType]::Window
+  )
+  for ($i = 0; $i -lt 40; $i++) {
+    Start-Sleep -Milliseconds 150
+    foreach ($window in $desktop.FindAll([System.Windows.Automation.TreeScope]::Children, $windowCondition)) {
+      try {
+        if ($window.Current.ProcessId -eq $processId -and $window.Current.ClassName -eq '#32770') { return $window }
+      } catch {}
+    }
+  }
+  throw 'Viber file picker မပွင့်ပါ။ PDF မပို့နိုင်ပါ။'
+}
+
+function Choose-File($dialog, [string]$filePath) {
+  $fileName = $null
+  foreach ($edit in (Find-Descendants $dialog ([System.Windows.Automation.ControlType]::Edit))) {
+    if ($edit.Current.AutomationId -eq '1148') { $fileName = $edit; break }
+  }
+  if (-not $fileName) { throw 'Windows file picker တွင် File name field ကို မတွေ့ပါ။' }
+  Click-Element $fileName
+  [System.Windows.Forms.Clipboard]::SetText($filePath)
+  [System.Windows.Forms.SendKeys]::SendWait('^a')
+  [System.Windows.Forms.SendKeys]::SendWait('^v')
+  Start-Sleep -Milliseconds 200
+  $openButton = $null
+  foreach ($button in (Find-Descendants $dialog ([System.Windows.Automation.ControlType]::Button))) {
+    if ($button.Current.AutomationId -eq '1') { $openButton = $button; break }
+  }
+  if (-not $openButton) { throw 'Windows file picker တွင် Open button ကို မတွေ့ပါ။' }
+  Click-Element $openButton
+}
+
+$action = $env:FOOTBALL_POS_VIBER_ACTION
+$groupName = $env:FOOTBALL_POS_VIBER_GROUP
+if ([string]::IsNullOrWhiteSpace($groupName)) { throw 'Viber group name ထည့်ပါ။' }
+$process = Get-ViberProcess
+$context = Select-ViberGroup $process $groupName
+if ($action -eq 'select') { Write-Output 'selected'; exit 0 }
+if ($action -ne 'send') { throw 'Unknown Viber action.' }
+$filePath = $env:FOOTBALL_POS_VIBER_FILE
+if ([string]::IsNullOrWhiteSpace($filePath) -or -not (Test-Path -LiteralPath $filePath)) { throw 'ပို့မည့် PDF file ကို မတွေ့ပါ။' }
+Open-AttachmentDialog $context
+$dialog = Wait-FileDialog $process.Id
+Choose-File $dialog $filePath
+$dialogClosed = $false
+for ($i = 0; $i -lt 30; $i++) {
+  Start-Sleep -Milliseconds 150
+  if (-not (Get-Rectangle $dialog)) { $dialogClosed = $true; break }
+}
+if (-not $dialogClosed) { throw 'Windows file picker မပိတ်သေးသောကြောင့် PDF မပို့ပါ။' }
+Start-Sleep -Milliseconds 1400
+[FootballPosNative]::SetForegroundWindow($process.MainWindowHandle) | Out-Null
+[System.Windows.Forms.SendKeys]::SendWait('{ENTER}')
+Write-Output 'sent'
+`;
+
+async function runWindowsViber(action: 'select' | 'send', groupName: string, filePath = '') {
+  const systemRoot = process.env.SystemRoot || 'C:\\Windows';
+  const powershell = join(systemRoot, 'System32', 'WindowsPowerShell', 'v1.0', 'powershell.exe');
+  const encoded = Buffer.from(windowsViberAutomationScript, 'utf16le').toString('base64');
+  try {
+    await execFileAsync(powershell, ['-NoLogo', '-NoProfile', '-NonInteractive', '-STA', '-OutputFormat', 'Text', '-ExecutionPolicy', 'Bypass', '-EncodedCommand', encoded], {
+      timeout: action === 'send' ? 45_000 : 25_000,
+      windowsHide: true,
+      env: { ...process.env, FOOTBALL_POS_VIBER_ACTION: action, FOOTBALL_POS_VIBER_GROUP: groupName, FOOTBALL_POS_VIBER_FILE: filePath },
+    });
+  } catch (error) {
+    const failure = error as { stderr?: string; stdout?: string; message?: string };
+    const detail = failure.stderr?.trim() || failure.stdout?.trim() || failure.message || 'Windows Viber automation မအောင်မြင်ပါ။';
+    throw new Error(detail.split(/\r?\n/).filter(Boolean).slice(-1)[0]);
+  }
+}
 async function selectViberGroup(groupName: string) {
-  if (process.platform !== 'darwin') throw new Error('Viber Desktop automation ကို လောလောဆယ် macOS တွင်သာ အသုံးပြုနိုင်သည်။');
   const cleanGroup = groupName.trim();
   if (!cleanGroup) throw new Error('Viber group name ထည့်ပါ။');
+  if (process.platform === 'win32') return runWindowsViber('select', cleanGroup);
+  if (process.platform !== 'darwin') throw new Error('Viber Desktop automation ကို macOS နှင့် Windows တွင်သာ အသုံးပြုနိုင်သည်။');
   const { stdout } = await execFileAsync('/usr/bin/osascript', ['-e', viberGroupSearchScript, cleanGroup], { timeout: 15_000 });
   const match = stdout.trim().match(/^(-?\d+(?:\.\d+)?),(-?\d+(?:\.\d+)?)$/);
   if (!match) throw new Error('Viber result နေရာကို မသတ်မှတ်နိုင်ပါ။ PDF မပို့ပါ။');
@@ -224,12 +479,14 @@ end run`;
   await execFileAsync('/usr/bin/osascript', ['-e', verifyScript, cleanGroup], { timeout: 5_000 });
 }
 async function sendFileToViber(groupName: string, filePath: string) {
-  if (process.platform !== 'darwin') throw new Error('Viber Desktop automation ကို လောလောဆယ် macOS တွင်သာ အသုံးပြုနိုင်သည်။');
   const cleanGroup = groupName.trim();
   if (!cleanGroup) throw new Error('Viber group name ထည့်ပါ။');
   const reportsFolder = resolve(join(app.getPath('documents'), 'Football Bet POS Reports'));
   const target = resolve(filePath);
-  if (!target.startsWith(`${reportsFolder}/`) || !existsSync(target)) throw new Error('ပို့မည့် PDF ကို Football Bet POS Reports folder တွင် မတွေ့ပါ။');
+  const relativeTarget = relative(reportsFolder, target);
+  if (!relativeTarget || relativeTarget.startsWith('..') || isAbsolute(relativeTarget) || !existsSync(target)) throw new Error('ပို့မည့် PDF ကို Football Bet POS Reports folder တွင် မတွေ့ပါ။');
+  if (process.platform === 'win32') return runWindowsViber('send', cleanGroup, target);
+  if (process.platform !== 'darwin') throw new Error('Viber Desktop automation ကို macOS နှင့် Windows တွင်သာ အသုံးပြုနိုင်သည်။');
   await selectViberGroup(cleanGroup);
   const script = `on run argv
 set pdfPath to item 1 of argv

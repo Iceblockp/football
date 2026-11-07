@@ -12,8 +12,8 @@ Offline Electron desktop app for recording football Body and O/U bets and produc
 - Separate Viber and Messenger ledgers: matches, bets, reports, exports, and commission settings are isolated by channel as well as date.
 - Viber defaults to a 3% player-win deduction and a 2% player-loss rebate.
 - Messenger defaults to a 5% gross-win deduction plus a 2% commission on `gross WIN + absolute gross LOSE`, credited to the player.
-- Optional API-Football automation stores the API key with Electron/macOS encryption, keeps the Mac and display awake while enabled, links each local match to a fixture ID, checks final scores overnight in Myanmar time, settles linked matches, and writes completed PDFs to `Documents/Football Bet POS Reports`.
-- Optional Viber auto delivery evaluates both channels for every affected accounting date, searches and selects the uniquely named configured Viber group, and sends each completed Viber and Messenger PDF once. The manual result check also evaluates both reports for the selected date, while selection or delivery failures remain pending and retry on the next automation interval.
+- Optional API-Football automation stores the API key with Electron/OS encryption, keeps the computer and display awake while enabled, links each local match to a fixture ID, checks final scores overnight in Myanmar time, settles linked matches, and writes completed PDFs to `Documents/Football Bet POS Reports`.
+- Optional Viber auto delivery supports macOS Accessibility automation and built-in Windows PowerShell/UI Automation without a separately installed helper app. It searches the uniquely named configured Viber group and sends each completed channel PDF once; failures remain pending and retry on the next automation interval.
 - Matches entered before 06:00 are treated as next-calendar-day kickoffs while remaining on the selected business/report date.
 - Excel-compatible UTF-8 CSV and PDF export.
 - Local data storage in Electron's application-data directory.
