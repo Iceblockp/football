@@ -1,9 +1,8 @@
 import { app, BrowserWindow, dialog, ipcMain, powerSaveBlocker, safeStorage } from 'electron';
-import { execFile } from 'node:child_process';
+import { execFile, spawn } from 'node:child_process';
 import { createHash } from 'node:crypto';
-import { copyFile, mkdir, mkdtemp, readFile, rm, stat, writeFile } from 'node:fs/promises';
+import { copyFile, mkdir, readFile, rm, stat, writeFile } from 'node:fs/promises';
 import { existsSync } from 'node:fs';
-import { tmpdir } from 'node:os';
 import { isAbsolute, join, relative, resolve } from 'node:path';
 import { promisify } from 'node:util';
 import type { ApiFixture, BookmakerSettings, Channel, CommonVoiceKey, Store, Team, TransferPackage, TransferPackageCore } from '../shared/models';
@@ -482,22 +481,44 @@ function readablePowerShellError(raw: string) {
 async function runWindowsViber(action: 'select' | 'send', groupName: string, filePath = '') {
   const systemRoot = process.env.SystemRoot || 'C:\\Windows';
   const powershell = join(systemRoot, 'System32', 'WindowsPowerShell', 'v1.0', 'powershell.exe');
-  const scriptFolder = await mkdtemp(join(tmpdir(), 'football-pos-viber-'));
-  const scriptPath = join(scriptFolder, 'automation.ps1');
   try {
-    // Windows PowerShell 5.1 needs a UTF-8 BOM to read Myanmar text in -File mode.
-    await writeFile(scriptPath, Buffer.concat([Buffer.from([0xef, 0xbb, 0xbf]), Buffer.from(windowsViberAutomationScript, 'utf8')]));
-    await execFileAsync(powershell, ['-NoLogo', '-NoProfile', '-NonInteractive', '-STA', '-OutputFormat', 'Text', '-ExecutionPolicy', 'Bypass', '-File', scriptPath], {
-      timeout: action === 'send' ? 45_000 : 25_000,
-      windowsHide: true,
-      env: { ...process.env, FOOTBALL_POS_VIBER_ACTION: action, FOOTBALL_POS_VIBER_GROUP: groupName, FOOTBALL_POS_VIBER_FILE: filePath },
+    await new Promise<void>((resolvePromise, rejectPromise) => {
+      const child = spawn(powershell, ['-NoLogo', '-NoProfile', '-NonInteractive', '-STA', '-OutputFormat', 'Text', '-Command', '-'], {
+        windowsHide: true,
+        env: { ...process.env, FOOTBALL_POS_VIBER_ACTION: action, FOOTBALL_POS_VIBER_GROUP: groupName, FOOTBALL_POS_VIBER_FILE: filePath },
+        stdio: ['pipe', 'pipe', 'pipe'],
+      });
+      let stdout = '';
+      let stderr = '';
+      let settled = false;
+      child.stdout.setEncoding('utf8');
+      child.stderr.setEncoding('utf8');
+      child.stdout.on('data', chunk => { stdout += chunk; });
+      child.stderr.on('data', chunk => { stderr += chunk; });
+      const timer = setTimeout(() => {
+        child.kill();
+        if (!settled) {
+          settled = true;
+          rejectPromise(Object.assign(new Error('Windows Viber automation အချိန်ကုန်သွားပါပြီ။'), { stdout, stderr }));
+        }
+      }, action === 'send' ? 45_000 : 25_000);
+      child.once('error', error => {
+        clearTimeout(timer);
+        if (!settled) { settled = true; rejectPromise(Object.assign(error, { stdout, stderr })); }
+      });
+      child.once('close', code => {
+        clearTimeout(timer);
+        if (settled) return;
+        settled = true;
+        if (code === 0) resolvePromise();
+        else rejectPromise(Object.assign(new Error(`PowerShell exited with code ${code ?? 'unknown'}.`), { stdout, stderr }));
+      });
+      child.stdin.end(windowsViberAutomationScript, 'utf8');
     });
   } catch (error) {
     const failure = error as { stderr?: string; stdout?: string; message?: string };
     const detail = failure.stderr?.trim() || failure.stdout?.trim() || failure.message || 'Windows Viber automation မအောင်မြင်ပါ။';
     throw new Error(readablePowerShellError(detail));
-  } finally {
-    try { await rm(scriptFolder, { recursive: true, force: true }); } catch { /* best-effort temporary cleanup */ }
   }
 }
 async function selectViberGroup(groupName: string) {
