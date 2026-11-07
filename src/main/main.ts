@@ -393,22 +393,51 @@ function Wait-FileDialog($processId) {
 }
 
 function Choose-File($dialog, [string]$filePath) {
-  $fileName = $null
+  $dialogRect = Get-Rectangle $dialog
+  if (-not $dialogRect) { throw 'Windows file picker နေရာကို မသတ်မှတ်နိုင်ပါ။' }
+  $fileNameCandidates = @()
   foreach ($edit in (Find-Descendants $dialog ([System.Windows.Automation.ControlType]::Edit))) {
-    if ($edit.Current.AutomationId -eq '1148') { $fileName = $edit; break }
+    $rect = Get-Rectangle $edit
+    if (-not $rect -or $rect.Top -lt ($dialogRect.Top + $dialogRect.Height * 0.55)) { continue }
+    $label = (($edit.Current.Name + ' ' + $edit.Current.AutomationId + ' ' + $edit.Current.HelpText)).ToLowerInvariant()
+    if ($label -match 'search') { continue }
+    $score = 0
+    if ($label -match 'file name|filename') { $score += 100 }
+    if ($edit.Current.AutomationId -eq '1148') { $score += 80 }
+    $score += [int]($rect.Top - $dialogRect.Top)
+    $fileNameCandidates += [pscustomobject]@{ Element = $edit; Score = $score }
+  }
+  $fileName = ($fileNameCandidates | Sort-Object Score -Descending | Select-Object -First 1).Element
+  if (-not $fileName) {
+    # Some Windows 11 dialogs expose File name as a ComboBox with a nested Edit.
+    foreach ($combo in (Find-Descendants $dialog ([System.Windows.Automation.ControlType]::ComboBox))) {
+      $rect = Get-Rectangle $combo
+      if (-not $rect -or $rect.Top -lt ($dialogRect.Top + $dialogRect.Height * 0.55)) { continue }
+      $nested = Find-Descendants $combo ([System.Windows.Automation.ControlType]::Edit)
+      if ($nested.Count -gt 0) { $fileName = $nested[0]; break }
+    }
   }
   if (-not $fileName) { throw 'Windows file picker တွင် File name field ကို မတွေ့ပါ။' }
-  Click-Element $fileName
-  [System.Windows.Forms.Clipboard]::SetText($filePath)
-  [System.Windows.Forms.SendKeys]::SendWait('^a')
-  [System.Windows.Forms.SendKeys]::SendWait('^v')
+  $valuePattern = $null
+  if ($fileName.TryGetCurrentPattern([System.Windows.Automation.ValuePattern]::Pattern, [ref]$valuePattern)) {
+    $valuePattern.SetValue($filePath)
+    if ($valuePattern.Current.Value -ne $filePath) { throw 'Windows file picker တွင် PDF path မထည့်နိုင်ပါ။' }
+  }
+  else {
+    Click-Element $fileName
+    [System.Windows.Forms.Clipboard]::SetText($filePath)
+    [System.Windows.Forms.SendKeys]::SendWait('^a')
+    [System.Windows.Forms.SendKeys]::SendWait('^v')
+  }
   Start-Sleep -Milliseconds 200
   $openButton = $null
   foreach ($button in (Find-Descendants $dialog ([System.Windows.Automation.ControlType]::Button))) {
     if ($button.Current.AutomationId -eq '1') { $openButton = $button; break }
   }
   if (-not $openButton) { throw 'Windows file picker တွင် Open button ကို မတွေ့ပါ။' }
-  Click-Element $openButton
+  $invokePattern = $null
+  if ($openButton.TryGetCurrentPattern([System.Windows.Automation.InvokePattern]::Pattern, [ref]$invokePattern)) { $invokePattern.Invoke() }
+  else { Click-Element $openButton }
 }
 
 try {
