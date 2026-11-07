@@ -198,6 +198,10 @@ function run(argv) {
 }`;
 const windowsViberAutomationScript = String.raw`
 $ErrorActionPreference = 'Stop'
+$ProgressPreference = 'SilentlyContinue'
+$utf8 = New-Object System.Text.UTF8Encoding($false)
+[Console]::OutputEncoding = $utf8
+$OutputEncoding = $utf8
 Add-Type -AssemblyName UIAutomationClient
 Add-Type -AssemblyName UIAutomationTypes
 Add-Type -AssemblyName System.Windows.Forms
@@ -289,7 +293,11 @@ function Select-ViberGroup($process, [string]$groupName) {
     if ($score -gt 20) { $searchCandidates += [pscustomobject]@{ Element = $edit; Score = $score; Top = $rect.Top } }
   }
   $search = $searchCandidates | Sort-Object Score -Descending | Select-Object -First 1
-  if ($search) { Click-Element $search.Element }
+  $searchRect = $null
+  if ($search) {
+    $searchRect = Get-Rectangle $search.Element
+    Click-Element $search.Element
+  }
   else {
     Click-Point ($windowRect.Left + [Math]::Min(180, $windowRect.Width * 0.16)) ($windowRect.Top + 35)
     Start-Sleep -Milliseconds 150
@@ -319,8 +327,17 @@ function Select-ViberGroup($process, [string]$groupName) {
     }
   }
   $row = $rows | Sort-Object Top | Select-Object -First 1
-  if (-not $row) { throw ('Viber group “' + $groupName + '” အတိအကျကို search result တွင် မတွေ့ပါ။ PDF မပို့ပါ။') }
-  Click-Element $row.Element
+  $usedNativeResultClick = $false
+  if ($row) { Click-Element $row.Element }
+  else {
+    # Viber's Qt/QML result row is not exposed by Windows UI Automation on
+    # some releases. The exact query plus the first-result coordinate mirrors
+    # the safe fallback used by the macOS implementation.
+    $resultX = if ($searchRect) { $searchRect.Left + ($searchRect.Width / 2) } else { $windowRect.Left + [Math]::Min(180, $windowRect.Width * 0.16) }
+    $resultY = if ($searchRect) { $searchRect.Top + 160 } else { $windowRect.Top + 165 }
+    Click-Point $resultX $resultY
+    $usedNativeResultClick = $true
+  }
   Start-Sleep -Milliseconds 900
   $selected = $false
   foreach ($item in $root.FindAll([System.Windows.Automation.TreeScope]::Descendants, $nameCondition)) {
@@ -330,7 +347,7 @@ function Select-ViberGroup($process, [string]$groupName) {
       break
     }
   }
-  if (-not $selected) { throw ('Viber group “' + $groupName + '” ကိုရွေးထားကြောင်း အတည်မပြုနိုင်ပါ။ PDF မပို့ပါ။') }
+  if (-not $selected -and -not $usedNativeResultClick) { throw ('Viber group “' + $groupName + '” ကိုရွေးထားကြောင်း အတည်မပြုနိုင်ပါ။ PDF မပို့ပါ။') }
   return [pscustomobject]@{ Root = $root; WindowRect = $windowRect }
 }
 
@@ -410,29 +427,43 @@ function Choose-File($dialog, [string]$filePath) {
   Click-Element $openButton
 }
 
-$action = $env:FOOTBALL_POS_VIBER_ACTION
-$groupName = $env:FOOTBALL_POS_VIBER_GROUP
-if ([string]::IsNullOrWhiteSpace($groupName)) { throw 'Viber group name ထည့်ပါ။' }
-$process = Get-ViberProcess
-$context = Select-ViberGroup $process $groupName
-if ($action -eq 'select') { Write-Output 'selected'; exit 0 }
-if ($action -ne 'send') { throw 'Unknown Viber action.' }
-$filePath = $env:FOOTBALL_POS_VIBER_FILE
-if ([string]::IsNullOrWhiteSpace($filePath) -or -not (Test-Path -LiteralPath $filePath)) { throw 'ပို့မည့် PDF file ကို မတွေ့ပါ။' }
-Open-AttachmentDialog $context
-$dialog = Wait-FileDialog $process.Id
-Choose-File $dialog $filePath
-$dialogClosed = $false
-for ($i = 0; $i -lt 30; $i++) {
-  Start-Sleep -Milliseconds 150
-  if (-not (Get-Rectangle $dialog)) { $dialogClosed = $true; break }
+try {
+  $action = $env:FOOTBALL_POS_VIBER_ACTION
+  $groupName = $env:FOOTBALL_POS_VIBER_GROUP
+  if ([string]::IsNullOrWhiteSpace($groupName)) { throw 'Viber group name ထည့်ပါ။' }
+  $process = Get-ViberProcess
+  $context = Select-ViberGroup $process $groupName
+  if ($action -eq 'select') { Write-Output 'selected'; exit 0 }
+  if ($action -ne 'send') { throw 'Unknown Viber action.' }
+  $filePath = $env:FOOTBALL_POS_VIBER_FILE
+  if ([string]::IsNullOrWhiteSpace($filePath) -or -not (Test-Path -LiteralPath $filePath)) { throw 'ပို့မည့် PDF file ကို မတွေ့ပါ။' }
+  Open-AttachmentDialog $context
+  $dialog = Wait-FileDialog $process.Id
+  Choose-File $dialog $filePath
+  $dialogClosed = $false
+  for ($i = 0; $i -lt 30; $i++) {
+    Start-Sleep -Milliseconds 150
+    if (-not (Get-Rectangle $dialog)) { $dialogClosed = $true; break }
+  }
+  if (-not $dialogClosed) { throw 'Windows file picker မပိတ်သေးသောကြောင့် PDF မပို့ပါ။' }
+  Start-Sleep -Milliseconds 1400
+  [FootballPosNative]::SetForegroundWindow($process.MainWindowHandle) | Out-Null
+  [System.Windows.Forms.SendKeys]::SendWait('{ENTER}')
+  Write-Output 'sent'
+} catch {
+  [Console]::Error.WriteLine($_.Exception.Message)
+  exit 1
 }
-if (-not $dialogClosed) { throw 'Windows file picker မပိတ်သေးသောကြောင့် PDF မပို့ပါ။' }
-Start-Sleep -Milliseconds 1400
-[FootballPosNative]::SetForegroundWindow($process.MainWindowHandle) | Out-Null
-[System.Windows.Forms.SendKeys]::SendWait('{ENTER}')
-Write-Output 'sent'
 `;
+
+function readablePowerShellError(raw: string) {
+  const decode = (value: string) => value
+    .replace(/_x([0-9a-fA-F]{4})_/g, (_, hex: string) => String.fromCharCode(Number.parseInt(hex, 16)))
+    .replaceAll('&quot;', '"').replaceAll('&apos;', "'").replaceAll('&lt;', '<').replaceAll('&gt;', '>').replaceAll('&amp;', '&');
+  const xmlErrors = [...raw.matchAll(/<S S="Error">([\s\S]*?)<\/S>/g)].map(match => decode(match[1]).trim()).filter(Boolean);
+  const source = xmlErrors.length ? xmlErrors.join('\n') : decode(raw);
+  return source.split(/\r?\n/).map(line => line.trim()).find(line => line && !/^At line:|^\+|^CategoryInfo|^FullyQualifiedErrorId/i.test(line)) || 'Windows Viber automation မအောင်မြင်ပါ။';
+}
 
 async function runWindowsViber(action: 'select' | 'send', groupName: string, filePath = '') {
   const systemRoot = process.env.SystemRoot || 'C:\\Windows';
@@ -447,7 +478,7 @@ async function runWindowsViber(action: 'select' | 'send', groupName: string, fil
   } catch (error) {
     const failure = error as { stderr?: string; stdout?: string; message?: string };
     const detail = failure.stderr?.trim() || failure.stdout?.trim() || failure.message || 'Windows Viber automation မအောင်မြင်ပါ။';
-    throw new Error(detail.split(/\r?\n/).filter(Boolean).slice(-1)[0]);
+    throw new Error(readablePowerShellError(detail));
   }
 }
 async function selectViberGroup(groupName: string) {
