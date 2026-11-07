@@ -361,33 +361,17 @@ function Open-AttachmentDialog($context) {
       if (-not $composer -or $rect.Top -gt $composer.Rect.Top) { $composer = [pscustomobject]@{ Element = $edit; Rect = $rect } }
     }
   }
-
-  $attachment = $null
-  $attachmentLabel = ''
-  foreach ($button in (Find-Descendants $root ([System.Windows.Automation.ControlType]::Button))) {
-    $rect = Get-Rectangle $button
-    if (-not $rect) { continue }
-    $label = (($button.Current.Name + ' ' + $button.Current.AutomationId + ' ' + $button.Current.HelpText)).ToLowerInvariant()
-    if ($label -match 'attach|send file|file|attachment' -and $rect.Top -gt ($windowRect.Top + $windowRect.Height * 0.60)) {
-      $attachment = $button
-      $attachmentLabel = $label
-      break
-    }
+  # Viber's conversation info area also exposes controls containing the word
+  # "File". Name-based matching can therefore open shared-file search instead
+  # of the attachment picker. On desktop, File Share is the second message-bar
+  # icon and sits about 130 px left of the composer.
+  if ($composer) {
+    Click-Point ($composer.Rect.Left - 130) ($composer.Rect.Top + $composer.Rect.Height / 2)
   }
-  if ($attachment) { Click-Element $attachment }
-  elseif ($composer) { Click-Point ($composer.Rect.Left - 28) ($composer.Rect.Top + $composer.Rect.Height / 2) }
-  else { Click-Point ($windowRect.Left + [Math]::Max(330, $windowRect.Width * 0.22)) ($windowRect.Bottom - 34) }
-  Start-Sleep -Milliseconds 350
-  if ($attachmentLabel -notmatch 'file') {
-    foreach ($button in (Find-Descendants $root ([System.Windows.Automation.ControlType]::Button))) {
-      $rect = Get-Rectangle $button
-      if (-not $rect) { continue }
-      $label = (($button.Current.Name + ' ' + $button.Current.AutomationId + ' ' + $button.Current.HelpText)).ToLowerInvariant()
-      if ($label -match 'send file|file' -and $rect.Top -gt ($windowRect.Top + $windowRect.Height * 0.45)) {
-        Click-Element $button
-        break
-      }
-    }
+  else {
+    # Qt may hide the composer from UI Automation. This fallback targets the
+    # same File Share icon using the stable lower chat-toolbar position.
+    Click-Point ($windowRect.Left + [Math]::Max(365, $windowRect.Width * 0.25)) ($windowRect.Bottom - 34)
   }
 }
 
