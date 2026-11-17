@@ -481,9 +481,10 @@ function readablePowerShellError(raw: string) {
 async function runWindowsViber(action: 'select' | 'send', groupName: string, filePath = '') {
   const systemRoot = process.env.SystemRoot || 'C:\\Windows';
   const powershell = join(systemRoot, 'System32', 'WindowsPowerShell', 'v1.0', 'powershell.exe');
+  const bootstrap = "$encoded = [Console]::In.ReadToEnd(); $source = [Text.Encoding]::Unicode.GetString([Convert]::FromBase64String($encoded)); & ([ScriptBlock]::Create($source))";
   try {
     await new Promise<void>((resolvePromise, rejectPromise) => {
-      const child = spawn(powershell, ['-NoLogo', '-NoProfile', '-NonInteractive', '-STA', '-OutputFormat', 'Text', '-Command', '-'], {
+      const child = spawn(powershell, ['-NoLogo', '-NoProfile', '-NonInteractive', '-STA', '-OutputFormat', 'Text', '-Command', bootstrap], {
         windowsHide: true,
         env: { ...process.env, FOOTBALL_POS_VIBER_ACTION: action, FOOTBALL_POS_VIBER_GROUP: groupName, FOOTBALL_POS_VIBER_FILE: filePath },
         stdio: ['pipe', 'pipe', 'pipe'],
@@ -506,14 +507,19 @@ async function runWindowsViber(action: 'select' | 'send', groupName: string, fil
         clearTimeout(timer);
         if (!settled) { settled = true; rejectPromise(Object.assign(error, { stdout, stderr })); }
       });
+      child.stdin.once('error', error => {
+        if (!settled) { settled = true; clearTimeout(timer); rejectPromise(Object.assign(error, { stdout, stderr })); }
+      });
       child.once('close', code => {
         clearTimeout(timer);
         if (settled) return;
         settled = true;
-        if (code === 0) resolvePromise();
+        const expectedOutput = action === 'send' ? 'sent' : 'selected';
+        if (code === 0 && stdout.split(/\r?\n/).some(line => line.trim() === expectedOutput)) resolvePromise();
+        else if (code === 0) rejectPromise(Object.assign(new Error(`PowerShell completed without ${expectedOutput} confirmation.`), { stdout, stderr }));
         else rejectPromise(Object.assign(new Error(`PowerShell exited with code ${code ?? 'unknown'}.`), { stdout, stderr }));
       });
-      child.stdin.end(windowsViberAutomationScript, 'utf8');
+      child.stdin.end(Buffer.from(windowsViberAutomationScript, 'utf16le').toString('base64'), 'ascii');
     });
   } catch (error) {
     const failure = error as { stderr?: string; stdout?: string; message?: string };
