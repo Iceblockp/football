@@ -344,6 +344,23 @@ export function App() {
   const save = async (next: Store) => { setStore(next); await window.footballPos.data.save(next); };
   const allTeams = store?.teams ?? []; const teams = allTeams.filter(team => team.bookmaker === activeBookmaker); const matches = store?.matches ?? []; const bets = store?.bets ?? []; const channels = store?.settings.channels ?? []; const enabledChannels = channels.filter(channel => channel.enabled); const activeChannel = channels.find(channel => channel.id === activeBookmaker); const otherChannels = enabledChannels.filter(channel => channel.id !== activeBookmaker); const dayMatches = matches.filter(x => x.date === activeDate && x.bookmaker === activeBookmaker); const dayBets = bets.filter(x => x.date === activeDate && x.bookmaker === activeBookmaker);
   const withActiveTeams = (nextTeams: Team[]) => [...allTeams.filter(team => team.bookmaker !== activeBookmaker), ...nextTeams];
+  const bulkDuplicateCodes = useMemo(() => {
+    if (!bulkPreview) return new Set<string>();
+    const counts = new Map<string, number>();
+    teams.forEach(team => {
+      const c = team.code.trim().toLowerCase().replace(/\s+/g, '');
+      if (c) counts.set(c, (counts.get(c) || 0) + 1);
+    });
+    Object.values(bulkPreview.missingCodes).forEach(code => {
+      const c = code.trim().toLowerCase().replace(/\s+/g, '');
+      if (c) counts.set(c, (counts.get(c) || 0) + 1);
+    });
+    const dupes = new Set<string>();
+    for (const [code, count] of counts.entries()) {
+      if (count > 1) dupes.add(code);
+    }
+    return dupes;
+  }, [bulkPreview, teams]);
   useEffect(() => {
     if (!store || enabledChannels.some(channel => channel.id === activeBookmaker)) return;
     const first = enabledChannels[0];
@@ -603,8 +620,23 @@ export function App() {
     const normalizedCodes = entries.map(([name, code]) => [name, code.trim().toLowerCase().replace(/\s+/g, '')] as const);
     const invalid = normalizedCodes.find(([, code]) => !/^[a-z0-9]+$/.test(code));
     if (invalid) return setBulkError(`${invalid[0]} အတွက် English letter/number short code ထည့်ပါ။`);
-    const allCodes = [...teams.map(team => team.code.toLowerCase()), ...normalizedCodes.map(([, code]) => code)];
-    if (new Set(allCodes).size !== allCodes.length) return setBulkError('Short code ထပ်နေပါသည်။ မတူသော code များသုံးပါ။');
+    const codeMap = new Map<string, string[]>();
+    teams.forEach(team => {
+      const code = team.code.trim().toLowerCase().replace(/\s+/g, '');
+      if (!codeMap.has(code)) codeMap.set(code, []);
+      codeMap.get(code)!.push(`${team.name} (ရှိပြီးသား)`);
+    });
+    normalizedCodes.forEach(([name, code]) => {
+      if (!codeMap.has(code)) codeMap.set(code, []);
+      codeMap.get(code)!.push(name);
+    });
+    const duplicateEntries: string[] = [];
+    for (const [code, names] of codeMap.entries()) {
+      if (names.length > 1 && normalizedCodes.some(([, c]) => c === code)) {
+        duplicateEntries.push(`“${code}” (${names.join(', ')})`);
+      }
+    }
+    if (duplicateEntries.length > 0) return setBulkError(`Short code ထပ်နေပါသည်: ${duplicateEntries.join(' · ')}။ မတူသော code များသုံးပါ။`);
     const newTeams: Team[] = normalizedCodes.map(([name, code]) => ({ id: uid(), bookmaker: activeBookmaker, name, code }));
     const createdMatches: Match[] = bulkPreview.rows.map(row => ({
       id: uid(), date: activeDate, bookmaker: activeBookmaker, time: row.time, home: row.teams[0], away: row.teams[1],
@@ -1852,7 +1884,28 @@ export function App() {
         {bulkError && <div className="bulk-error">{bulkError}</div>}
         {bulkPreview && <div className="bulk-preview">
           <div className="bulk-summary"><b>✓ Match {bulkPreview.rows.length} ပွဲ မှန်ကန်သည်</b><span>Team အသစ် {Object.keys(bulkPreview.missingCodes).length} သင်း</span></div>
-          {Object.keys(bulkPreview.missingCodes).length > 0 && <div className="bulk-team-codes"><b>Team အသစ်များအတွက် Quick Entry short code ဖြည့်ပါ</b>{Object.keys(bulkPreview.missingCodes).map(name => <label key={name}><span>{name}</span><input value={bulkPreview.missingCodes[name]} maxLength={12} placeholder="ဥပမာ ly" onChange={e => setBulkPreview(current => current ? { ...current, missingCodes: { ...current.missingCodes, [name]: e.target.value } } : null)}/></label>)}</div>}
+          {Object.keys(bulkPreview.missingCodes).length > 0 && <div className="bulk-team-codes">
+            <b>Team အသစ်များအတွက် Quick Entry short code ဖြည့်ပါ</b>
+            {Object.keys(bulkPreview.missingCodes).map(name => {
+              const rawCode = bulkPreview.missingCodes[name] ?? '';
+              const normCode = rawCode.trim().toLowerCase().replace(/\s+/g, '');
+              const isDupe = normCode !== '' && bulkDuplicateCodes.has(normCode);
+              return (
+                <label key={name} className={isDupe ? 'duplicate-team-code' : undefined}>
+                  <span>{name}</span>
+                  <input
+                    value={rawCode}
+                    maxLength={12}
+                    placeholder="ဥပမာ ly"
+                    onChange={e => {
+                      setBulkError('');
+                      setBulkPreview(current => current ? { ...current, missingCodes: { ...current.missingCodes, [name]: e.target.value } } : null);
+                    }}
+                  />
+                </label>
+              );
+            })}
+          </div>}
           <div className="bulk-match-preview">{bulkPreview.rows.map((row, index) => <div key={`${row.time}-${index}`}><span>{row.nextDay ? nextDate(activeDate) : activeDate} · {row.time}</span><b>{row.teams[0]} <em>vs</em> {row.teams[1]}</b><small>{row.bd ? `BD ${row.bd}` : ''}{row.bd && row.ou ? ' · ' : ''}{row.ou ? `O/U ${row.ou}` : ''}</small></div>)}</div>
           <button type="button" onClick={() => void saveBulkMatches()}>အားလုံးသိမ်းမည်</button>
         </div>}
