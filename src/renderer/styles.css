@@ -180,3 +180,53 @@ main>.card{min-height:0;overflow:auto}
 :root[data-theme="dark"] .viber-channel-chip.active{background:#1c3824;border-color:#416b4b;color:#bce0c5}
 :root[data-theme="dark"] .viber-channel-hint{color:#8ea393}
 
+.analytics-page{display:flex;flex-direction:column;gap:18px;padding-bottom:24px}
+.analytics-head{display:flex;justify-content:space-between;align-items:flex-end;gap:14px;flex-wrap:wrap;margin-bottom:16px}
+.analytics-view-toggle{display:inline-flex;gap:4px;padding:4px;border-radius:9px;background:#eef3ea;border:1px solid #d4dfd0}
+.analytics-view-toggle button{margin:0;padding:7px 13px;font-size:12px;border-radius:7px;background:transparent;color:#3d5642}
+.analytics-view-toggle button:hover{background:#dfead9;color:#1d3b25}
+.analytics-view-toggle button.selected{background:#2d6b43;color:#fff}
+.analytics-filters{display:grid;grid-template-columns:1fr 1.2fr 1.4fr;gap:16px;padding-top:14px;border-top:1px solid #e3ebdf;align-items:start}
+.analytics-filter-group{display:flex;flex-direction:column;gap:7px}
+.analytics-filter-head{display:flex;justify-content:space-between;align-items:center;gap:8px}
+.analytics-filter-label{font-size:12px;font-weight:800;color:#354e3b}
+.analytics-pill-row{display:flex;flex-wrap:wrap;gap:6px}
+.analytics-date-range{display:grid;grid-template-columns:1fr 1fr;gap:8px;margin-top:4px}
+.analytics-date-range label{font-size:11px}
+.analytics-date-range input{padding:6px 8px;font-size:12px}
+.analytics-match-controls{display:grid;gap:7px}
+.analytics-match-controls input,.analytics-match-controls select{padding:7px 9px;font-size:12px}
+.analytics-kpi-grid{display:grid;grid-template-columns:repeat(4,minmax(0,1fr));gap:16px}
+.analytics-kpi{display:flex;flex-direction:column;gap:6px;padding:18px 20px}
+.analytics-kpi>span{font-size:12px;font-weight:700;color:#607464}
+.analytics-kpi>strong{font-size:24px;font-weight:800;letter-spacing:-.4px;font-variant-numeric:tabular-nums;color:#183425}
+.analytics-kpi>small{font-size:11px;color:#68786c;line-height:1.4}
+.analytics-kpi-split{display:flex;align-items:baseline;gap:12px;font-size:18px;font-variant-numeric:tabular-nums}
+.analytics-kpi-total.positive{background:#edf7ea;border-color:#a3cb98}
+.analytics-kpi-total.positive>strong{color:#137645}
+.analytics-kpi-total.negative{background:#fcf0ef;border-color:#e5aaa6}
+.analytics-kpi-total.negative>strong{color:#b23b36}
+.analytics-section-head{display:flex;justify-content:space-between;align-items:center;gap:12px;flex-wrap:wrap;margin-bottom:4px}
+.analytics-section-head .muted{margin:0}
+.analytics-match-channels{display:flex;flex-wrap:wrap;gap:4px;margin-top:4px}
+.analytics-channel-tag{display:inline-block;padding:2px 6px;border-radius:4px;font-size:10px;font-weight:700;background:#edf5e8;border:1px solid #c9dec2;color:#235431}
+.analytics-selected-row td{background:#f2f8ee}
+:root[data-theme="dark"] .analytics-view-toggle{background:#101713;border-color:#33453a}
+:root[data-theme="dark"] .analytics-view-toggle button{color:#aebfb2}
+:root[data-theme="dark"] .analytics-view-toggle button:hover{background:#27362c;color:#e2eee4}
+:root[data-theme="dark"] .analytics-view-toggle button.selected{background:#3f8054;color:#fff}
+:root[data-theme="dark"] .analytics-filters{border-color:#33453a}
+:root[data-theme="dark"] .analytics-filter-label{color:#c8d7cb}
+:root[data-theme="dark"] .analytics-kpi>span,
+:root[data-theme="dark"] .analytics-kpi>small{color:#9aaca0}
+:root[data-theme="dark"] .analytics-kpi>strong{color:#edf6ef}
+:root[data-theme="dark"] .analytics-kpi-total.positive{background:#193321;border-color:#416b4b}
+:root[data-theme="dark"] .analytics-kpi-total.positive>strong{color:#7ee09b}
+:root[data-theme="dark"] .analytics-kpi-total.negative{background:#3a1f1d;border-color:#75413d}
+:root[data-theme="dark"] .analytics-kpi-total.negative>strong{color:#ff9e98}
+:root[data-theme="dark"] .analytics-channel-tag{background:#223528;border-color:#3f5b47;color:#a8dcb2}
+:root[data-theme="dark"] .analytics-selected-row td{background:#203226}
+@media(max-width:1100px){.analytics-filters{grid-template-columns:1fr}.analytics-kpi-grid{grid-template-columns:repeat(2,minmax(0,1fr))}}
+@media(max-width:650px){.analytics-kpi-grid{grid-template-columns:1fr}}
+
+

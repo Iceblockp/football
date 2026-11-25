@@ -141,13 +141,70 @@ function selectionLabel(settlement: Settlement): string {
   return bet.selection === 'up' ? 'Up' : 'Down';
 }
 const fallbackSummarySettings = (): BookmakerSettings => ({ mode: 'summary', playerWinDeduction: 0, playerLossRebate: 0, winTaxRate: 5, turnoverCommissionRate: 2 });
+const getChannelSettings = (store: Store, bookmaker: Bookmaker): BookmakerSettings =>
+  store.settings.bookmakerSettings[bookmaker] ?? (bookmaker === 'viber'
+    ? { mode: 'direct' as const, playerWinDeduction: 3, playerLossRebate: 2, winTaxRate: 0, turnoverCommissionRate: 0 }
+    : fallbackSummarySettings());
+const computeReportTotals = (items: Settlement[], settings: BookmakerSettings, view: ViewMode): ReportTotals => {
+  const results = items.map(settlement => viewResult(settlement, settings, view));
+  const betAmount = items.reduce((n, x) => n + x.bet.amount, 0);
+  const grossWin = results.filter(result => result.gross > 0).reduce((n, result) => n + result.gross, 0);
+  const grossLoss = results.filter(result => result.gross < 0).reduce((n, result) => n + result.gross, 0);
+  const winCom = results.filter(result => result.gross > 0).reduce((n, result) => n + result.adjustment, 0);
+  const loseCom = results.filter(result => result.gross < 0).reduce((n, result) => n + result.adjustment, 0);
+  const netWin = grossWin + winCom;
+  const netLoss = grossLoss + loseCom;
+  const columnTotal = netWin + netLoss;
+  const turnover = items.reduce((n, settlement) => n + Math.abs(settlement.signed), 0);
+  const commissionRate = settings.mode === 'summary' ? settings.turnoverCommissionRate : 0;
+  const commission = turnover * commissionRate / 100;
+  const commissionEffect = view === 'player' ? commission : -commission;
+  const total = columnTotal + commissionEffect;
+  return { betAmount, grossWin, grossLoss, winCom, loseCom, netWin, netLoss, columnTotal, commission, commissionEffect, total, commissionRate, commissionLabel: 'Turnover Com' };
+};
+const emptyTotals = (): ReportTotals => ({
+  betAmount: 0, grossWin: 0, grossLoss: 0, winCom: 0, loseCom: 0,
+  netWin: 0, netLoss: 0, columnTotal: 0, commission: 0, commissionEffect: 0,
+  total: 0, commissionRate: 0, commissionLabel: 'Turnover Com',
+});
+const mergeReportTotals = (list: ReportTotals[]): ReportTotals => {
+  const acc = emptyTotals();
+  for (const t of list) {
+    acc.betAmount += t.betAmount;
+    acc.grossWin += t.grossWin;
+    acc.grossLoss += t.grossLoss;
+    acc.winCom += t.winCom;
+    acc.loseCom += t.loseCom;
+    acc.netWin += t.netWin;
+    acc.netLoss += t.netLoss;
+    acc.columnTotal += t.columnTotal;
+    acc.commission += t.commission;
+    acc.commissionEffect += t.commissionEffect;
+    acc.total += t.total;
+  }
+  return acc;
+};
+const buildMatchKeyResolver = (allMatches: Match[]) => {
+  const apiByNameKey = new Map<string, string>();
+  for (const m of allMatches) {
+    if (m.apiFixtureId) {
+      const nameKey = `${m.date}:${normalizeTeamName(m.home)}__${normalizeTeamName(m.away)}`;
+      if (!apiByNameKey.has(nameKey)) apiByNameKey.set(nameKey, `api:${m.apiFixtureId}`);
+    }
+  }
+  return (m: Match): string => {
+    if (m.apiFixtureId) return `api:${m.apiFixtureId}`;
+    const nameKey = `${m.date}:${normalizeTeamName(m.home)}__${normalizeTeamName(m.away)}`;
+    return apiByNameKey.get(nameKey) ?? `name:${nameKey}`;
+  };
+};
 const channelName = (store: Store, id: Bookmaker) => store.settings.channels.find(channel => channel.id === id)?.name ?? id;
 const channelFileName = (store: Store, id: Bookmaker) => {
   const readable = channelName(store, id).trim().replace(/\s+/g, '-').replace(/[^\p{L}\p{N}._-]+/gu, '').replace(/^-+|-+$/g, '');
   return readable || id;
 };
 function automatedReport(store: Store, date: string, bookmaker: Bookmaker) {
-  const settings = store.settings.bookmakerSettings[bookmaker] ?? fallbackSummarySettings();
+  const settings = getChannelSettings(store, bookmaker);
   const view = store.settings.view;
   const settlements = sortBets(store.bets.filter(bet => bet.date === date && bet.bookmaker === bookmaker)).map(bet => {
     const match = store.matches.find(item => item.id === bet.matchId);
@@ -155,20 +212,12 @@ function automatedReport(store: Store, date: string, bookmaker: Bookmaker) {
     return match && rule ? settle(bet, match, rule) : null;
   }).filter(Boolean) as Settlement[];
   const results = settlements.map(item => viewResult(item, settings, view));
-  const grossWin = results.filter(item => item.gross > 0).reduce((sum, item) => sum + item.gross, 0);
-  const grossLoss = results.filter(item => item.gross < 0).reduce((sum, item) => sum + item.gross, 0);
-  const winCom = results.filter(item => item.gross > 0).reduce((sum, item) => sum + item.adjustment, 0);
-  const loseCom = results.filter(item => item.gross < 0).reduce((sum, item) => sum + item.adjustment, 0);
-  const columnTotal = grossWin + grossLoss + winCom + loseCom;
-  const commissionRate = settings.mode === 'summary' ? settings.turnoverCommissionRate : 0;
-  const commission = settlements.reduce((sum, item) => sum + Math.abs(item.signed), 0) * commissionRate / 100;
-  const commissionEffect = view === 'player' ? commission : -commission;
-  const total = columnTotal + commissionEffect;
+  const { betAmount, grossWin, grossLoss, winCom, loseCom, columnTotal, commissionEffect, total, commissionRate } = computeReportTotals(settlements, settings, view);
   const signed = (value: number) => `${value > 0 ? '+' : value < 0 ? '-' : ''}${money(value)}`;
   const header = ['No.', 'Match', 'Rule', 'ရွေးချယ်မှု', 'လောင်းငွေ', 'Result', '% (+)', '% (-)', 'WIN', 'LOSE', 'Com', 'Final', 'Status'];
   const details = settlements.map((item, index) => { const result = results[index]; return [String(index + 1), `${item.match.home} vs ${item.match.away}`, exportRuleLabel(item), selectionLabel(item), money(item.bet.amount), item.match.postponed ? 'P:P' : item.match.homeScore === null ? '' : `${item.match.homeScore}:${item.match.awayScore}`, result.gross > 0 ? String(item.band.rate) : '', result.gross < 0 ? String(item.band.rate) : '', result.gross > 0 ? money(result.gross) : '', result.gross < 0 ? `-${money(result.gross)}` : '', result.adjustment ? `${signed(result.adjustment)} (${adjustmentRate(result)}%)` : '', result.final ? signed(result.final) : '', item.band.outcome === 'refund' ? 'Refund' : result.finalLabel]; });
   const summary: [string, string][] = [['WIN gross', signed(grossWin)], ['WIN Com', signed(winCom)], ['WIN final', signed(grossWin + winCom)], ['LOSE gross', signed(grossLoss)], ['LOSE Com', signed(loseCom)], ['LOSE final', signed(grossLoss + loseCom)], ...(commissionRate ? [[`Turnover Com (${commissionRate}%)`, signed(commissionEffect)] as [string, string]] : []), ['TOTAL', signed(total)]];
-  const footer = ['TOTAL', '', '', '', money(settlements.reduce((sum, item) => sum + item.bet.amount, 0)), '', '', '', money(grossWin), `-${money(grossLoss)}`, `WIN ${signed(winCom)} | LOSE ${signed(loseCom)}`, signed(columnTotal), 'Final column total'];
+  const footer = ['TOTAL', '', '', '', money(betAmount), '', '', '', money(grossWin), `-${money(grossLoss)}`, `WIN ${signed(winCom)} | LOSE ${signed(loseCom)}`, signed(columnTotal), 'Final column total'];
   const rows = [header, ...details, footer];
   const title = `${channelName(store, bookmaker)} · ${view === 'dai' ? 'Dai View' : 'Player View'}`;
   const html = `<!doctype html><html><head><meta charset="utf-8"><style>body{font-family:Arial,sans-serif;padding:22px;color:#13261a}h1{font-size:20px}h2{font-size:14px;margin:18px 0 6px}table{width:100%;border-collapse:collapse;font-size:10px}td,th{border:1px solid #8da393;padding:5px;text-align:left}th{background:#d6e7b0}.summary{width:320px}.summary td:last-child{text-align:right}.positive{color:#137645;font-weight:bold}.negative{color:#b23b36;font-weight:bold}</style></head><body><h1>Football Bet POS — ${escapeHtml(title)} (${date})</h1><table><thead><tr>${header.map(value => `<th>${escapeHtml(value)}</th>`).join('')}</tr></thead><tbody>${rows.slice(1).map(row => `<tr>${row.map(value => `<td>${escapeHtml(value)}</td>`).join('')}</tr>`).join('')}</tbody></table><h2>Summary</h2><table class="summary"><tbody>${summary.map(([label, value]) => `<tr><td>${escapeHtml(label)}</td><td>${escapeHtml(value)}</td></tr>`).join('')}</tbody></table></body></html>`;
@@ -299,7 +348,15 @@ function TeamSelect({ label, value, teams, onChange }: { label: string; value: s
   return <label>{label}<div className="team-picker"><input value={query} placeholder="🔍 Team name / code ရှာရန်" onFocus={() => setOpen(true)} onChange={e => { setQuery(e.target.value); onChange(''); setOpen(true); }} onBlur={() => setTimeout(() => setOpen(false), 150)}/>{open && <div className="team-options">{matches.length ? matches.map(team => <button type="button" key={team.id} onMouseDown={e => e.preventDefault()} onClick={() => choose(team)}><b>{team.name}</b><code>{team.code}</code></button>) : <span>ကိုက်ညီသော Team မရှိပါ</span>}</div>}</div></label>;
 }
 export function App() {
-  const [store, setStore] = useState<Store | null>(null); const [page, setPage] = useState<'matches' | 'ledger' | 'report' | 'settings'>('matches'); const [notice, setNotice] = useState(''); const [activeDate, setActiveDate] = useState(today());
+  const [store, setStore] = useState<Store | null>(null); const [page, setPage] = useState<'matches' | 'ledger' | 'report' | 'analytics' | 'settings'>('matches'); const [notice, setNotice] = useState(''); const [activeDate, setActiveDate] = useState(today());
+  const [analyticsDateMode, setAnalyticsDateMode] = useState<'day' | 'range' | 'all'>('day');
+  const [analyticsFrom, setAnalyticsFrom] = useState(today());
+  const [analyticsTo, setAnalyticsTo] = useState(today());
+  const [analyticsChannelFilter, setAnalyticsChannelFilter] = useState<string[] | null>(null);
+  const [analyticsMatchKey, setAnalyticsMatchKey] = useState<string>('all');
+  const [analyticsMatchSearch, setAnalyticsMatchSearch] = useState('');
+  const [analyticsDetailSearch, setAnalyticsDetailSearch] = useState('');
+  const [analyticsView, setAnalyticsView] = useState<ViewMode | null>(null);
   const [settingsTab, setSettingsTab] = useState<'general' | 'report' | 'matches' | 'voice' | 'automation'>('general');
   const [activeBookmaker, setActiveBookmaker] = useState<Bookmaker>('viber');
   const [transferDestination, setTransferDestination] = useState<Bookmaker>('messenger');
@@ -396,11 +453,117 @@ export function App() {
   useEffect(() => { const match = dayMatches.find(item => item.id === betForm.matchId); const active = match?.rules.find(rule => rule.status !== 'closed'); if (match && active && !match.rules.some(rule => rule.id === betForm.ruleId)) setBetForm(current => ({ ...current, ruleId: active.id, selection: active.market === 'total' ? 'up' : bodyBaseSide(active) })); }, [betForm.matchId]);
   const selectedMatch = dayMatches.find(x => x.id === betForm.matchId); const selectedRule = selectedMatch?.rules.find(x => x.id === betForm.ruleId);
   const settlements = useMemo(() => store ? sortBets(bets).map(b => { const m = matches.find(x => x.id === b.matchId); const r = b.ruleSnapshot ?? m?.rules.find(x => x.id === b.ruleId); return m && r ? settle(b, m, r) : null; }).filter(Boolean) as Settlement[] : [], [store, bets, matches]);
-  const activeCommission = store?.settings.bookmakerSettings[activeBookmaker] ?? (activeBookmaker === 'viber'
-    ? { mode: 'direct' as const, playerWinDeduction: 3, playerLossRebate: 2, winTaxRate: 0, turnoverCommissionRate: 0 }
-    : fallbackSummarySettings());
+  const activeCommission = store ? getChannelSettings(store, activeBookmaker) : fallbackSummarySettings();
   const currentView = store?.settings.view ?? 'dai';
-  const daySettlements = settlements.filter(x => x.bet.date === activeDate && x.bet.bookmaker === activeBookmaker); const reportSettlements = sortSettlements(daySettlements, reportSortMode); const displayedResults = daySettlements.map(settlement => viewResult(settlement, activeCommission, currentView)); const totalBetAmount = daySettlements.reduce((n, x) => n + x.bet.amount, 0); const grossWin = displayedResults.filter(result => result.gross > 0).reduce((n, result) => n + result.gross, 0); const grossLoss = displayedResults.filter(result => result.gross < 0).reduce((n, result) => n + result.gross, 0); const winCom = displayedResults.filter(result => result.gross > 0).reduce((n, result) => n + result.adjustment, 0); const loseCom = displayedResults.filter(result => result.gross < 0).reduce((n, result) => n + result.adjustment, 0); const netWin = grossWin + winCom; const netLoss = grossLoss + loseCom; const columnTotal = netWin + netLoss; const turnover = daySettlements.reduce((n, settlement) => n + Math.abs(settlement.signed), 0); const commissionRate = activeCommission.mode === 'summary' ? activeCommission.turnoverCommissionRate : 0; const commission = turnover * commissionRate / 100; const commissionEffect = currentView === 'player' ? commission : -commission; const total = columnTotal + commissionEffect; const reportTotals: ReportTotals = { betAmount: totalBetAmount, grossWin, grossLoss, winCom, loseCom, netWin, netLoss, columnTotal, commission, commissionEffect, total, commissionRate, commissionLabel: 'Turnover Com' };
+  const daySettlements = settlements.filter(x => x.bet.date === activeDate && x.bet.bookmaker === activeBookmaker);
+  const reportSettlements = sortSettlements(daySettlements, reportSortMode);
+  const reportTotals = computeReportTotals(daySettlements, activeCommission, currentView);
+  const { betAmount: totalBetAmount, grossWin, grossLoss, winCom, loseCom, netWin, netLoss, columnTotal, commissionEffect, total, commissionRate } = reportTotals;
+  const effectiveAnalyticsView = analyticsView ?? currentView;
+  const analyticsData = useMemo(() => {
+    if (!store) return null;
+    const resolveMatchKey = buildMatchKeyResolver(matches);
+    const activeChannelIds = new Set(analyticsChannelFilter ?? enabledChannels.map(c => c.id));
+
+    const dateAndChannelSettlements = settlements.filter(s => {
+      if (!activeChannelIds.has(s.bet.bookmaker)) return false;
+      if (analyticsDateMode === 'day') return s.bet.date === activeDate;
+      if (analyticsDateMode === 'range') {
+        const from = analyticsFrom <= analyticsTo ? analyticsFrom : analyticsTo;
+        const to = analyticsFrom <= analyticsTo ? analyticsTo : analyticsFrom;
+        return s.bet.date >= from && s.bet.date <= to;
+      }
+      return true;
+    });
+
+    const matchOptionMap = new Map<string, {
+      key: string; date: string; time: string; home: string; away: string;
+      apiLeague?: string; resultText: string; betsCount: number; stake: number; channels: Set<string>;
+    }>();
+    for (const s of dateAndChannelSettlements) {
+      const key = resolveMatchKey(s.match);
+      const existing = matchOptionMap.get(key);
+      const resultText = s.match.postponed ? 'P:P'
+        : s.match.homeScore !== null && s.match.awayScore !== null ? `${s.match.homeScore}:${s.match.awayScore}` : 'Pending';
+      if (existing) {
+        existing.betsCount += 1;
+        existing.stake += s.bet.amount;
+        existing.channels.add(s.bet.bookmaker);
+        if (existing.resultText === 'Pending' && resultText !== 'Pending') existing.resultText = resultText;
+        if (!existing.apiLeague && s.match.apiLeague) existing.apiLeague = s.match.apiLeague;
+      } else {
+        matchOptionMap.set(key, {
+          key, date: s.match.date, time: s.match.time, home: s.match.home, away: s.match.away,
+          apiLeague: s.match.apiLeague, resultText, betsCount: 1, stake: s.bet.amount, channels: new Set([s.bet.bookmaker]),
+        });
+      }
+    }
+    const matchOptions = [...matchOptionMap.values()].sort((a, b) =>
+      a.date.localeCompare(b.date) || a.time.localeCompare(b.time) || a.home.localeCompare(b.home)
+    );
+
+    const effectiveMatchKey = analyticsMatchKey !== 'all' && matchOptionMap.has(analyticsMatchKey) ? analyticsMatchKey : 'all';
+    const filteredSettlements = effectiveMatchKey === 'all'
+      ? dateAndChannelSettlements
+      : dateAndChannelSettlements.filter(s => resolveMatchKey(s.match) === effectiveMatchKey);
+
+    const channelRows = channels
+      .filter(ch => activeChannelIds.has(ch.id))
+      .map(ch => {
+        const items = filteredSettlements.filter(s => s.bet.bookmaker === ch.id);
+        const settings = getChannelSettings(store, ch.id);
+        const chTotals = computeReportTotals(items, settings, effectiveAnalyticsView);
+        const settledCount = items.filter(s => s.label !== 'Pending').length;
+        return { channel: ch, settings, items, totals: chTotals, settledCount, pendingCount: items.length - settledCount };
+      });
+
+    const overallTotals = mergeReportTotals(channelRows.map(r => r.totals));
+    const settledCount = filteredSettlements.filter(s => s.label !== 'Pending').length;
+    const pendingCount = filteredSettlements.length - settledCount;
+
+    const matchMap = new Map<string, {
+      key: string; date: string; time: string; home: string; away: string;
+      apiLeague?: string; resultText: string; settlements: Settlement[]; channels: Set<string>;
+      bdHomeStake: number; bdAwayStake: number; ouUpStake: number; ouDownStake: number;
+      settledCount: number; pendingCount: number;
+    }>();
+
+    for (const s of filteredSettlements) {
+      const key = resolveMatchKey(s.match);
+      let entry = matchMap.get(key);
+      if (!entry) {
+        const resultText = s.match.postponed ? 'P:P'
+          : s.match.homeScore !== null && s.match.awayScore !== null ? `${s.match.homeScore}:${s.match.awayScore}` : 'Pending';
+        entry = {
+          key, date: s.match.date, time: s.match.time, home: s.match.home, away: s.match.away,
+          apiLeague: s.match.apiLeague, resultText, settlements: [], channels: new Set(),
+          bdHomeStake: 0, bdAwayStake: 0, ouUpStake: 0, ouDownStake: 0, settledCount: 0, pendingCount: 0,
+        };
+        matchMap.set(key, entry);
+      }
+      entry.settlements.push(s);
+      entry.channels.add(s.bet.bookmaker);
+      if (s.rule.market === 'body') {
+        if (s.bet.selection === 'home') entry.bdHomeStake += s.bet.amount;
+        else entry.bdAwayStake += s.bet.amount;
+      } else {
+        if (s.bet.selection === 'up') entry.ouUpStake += s.bet.amount;
+        else entry.ouDownStake += s.bet.amount;
+      }
+      if (s.label === 'Pending') entry.pendingCount += 1;
+      else entry.settledCount += 1;
+    }
+
+    const matchRows = [...matchMap.values()].map(entry => {
+      const perChannel = [...entry.channels].map(chId => {
+        const chItems = entry.settlements.filter(s => s.bet.bookmaker === chId);
+        return computeReportTotals(chItems, getChannelSettings(store, chId), effectiveAnalyticsView);
+      });
+      return { ...entry, totals: mergeReportTotals(perChannel) };
+    }).sort((a, b) => b.totals.betAmount - a.totals.betAmount || a.date.localeCompare(b.date) || a.time.localeCompare(b.time));
+
+    return { activeChannelIds, matchOptions, effectiveMatchKey, filteredSettlements, channelRows, overallTotals, settledCount, pendingCount, matchRows };
+  }, [store, matches, settlements, channels, enabledChannels, analyticsChannelFilter, analyticsDateMode, analyticsFrom, analyticsTo, activeDate, analyticsMatchKey, effectiveAnalyticsView]);
   const flash = (message: string) => { setNotice(message); setTimeout(() => setNotice(''), 3500); };
   const stopVoiceOutput = () => {
     voiceRunRef.current += 1;
@@ -1619,7 +1782,7 @@ export function App() {
     return <main><section className="card" style={{ maxWidth: '1000px', margin: '30px auto' }}><p className="eyebrow">LINK API FIXTURE</p><h2>Software: {fixturePicker.match.home} vs {fixturePicker.match.away}</h2><p className="muted">စာရင်းရက်: <b>{fixturePicker.match.date}</b> · Default သည် match ၏ actual kickoff date ဖြစ်သည်။ မနက် 06:00 မတိုင်မီပွဲကို နောက်တစ်ရက်အဖြစ် အလိုအလျောက်ရွေးပြီး လိုအပ်လျှင် manual ပြောင်းနိုင်သည်။</p><div style={{ display: 'flex', gap: '8px', alignItems: 'flex-end', flexWrap: 'wrap', marginBottom: '12px' }}><label style={{ margin: 0 }}>API fixture ရှာမည့်ရက်<input type="date" value={fixturePicker.searchDate} onChange={e => setFixturePicker({ ...fixturePicker, searchDate: e.target.value })}/></label><button type="button" disabled={fixturePickerLoading} onClick={() => void searchApiFixtureDate()}>{fixturePickerLoading ? 'ရှာနေသည်…' : 'ဤရက်ကို အသစ်ပြန်ယူမည်'}</button><small className="muted">ရက်တစ်ရက်သာ ရှာသဖြင့် ပထမ load သို့မဟုတ် အသစ်ပြန်ယူမှုသည် request 1 ခု။ Cache ရှိသော နောက်ထပ် link သည် request 0 ခု။</small></div><p className="muted">API Match ၏ Home/Away အစဉ်နှင့် Software ၏ ဘယ်/ညာအစဉ်ကို နှိုင်းပြီး ချိတ်နည်းရွေးပါ။ မှားလျှင် result ပြောင်းပြန်ဖြစ်နိုင်သည်။</p><input autoFocus value={fixtureFilter} onChange={e => setFixtureFilter(e.target.value)} placeholder="Loaded list ထဲမှ English team or league name ရှာပါ"/><button type="button" className="secondary" onClick={() => setFixturePicker(null)}>မချိတ်တော့ပါ</button><div className="table-wrap"><table><thead><tr><th>Myanmar Time</th><th>League</th><th>API Match</th><th>Status</th><th>Mapping ရွေးရန်</th></tr></thead><tbody>{visible.map(fixture => <tr key={fixture.id}><td>{new Date(fixture.kickoffAt).toLocaleString('en-GB', { timeZone: 'Asia/Yangon', month: 'short', day: '2-digit', hour: '2-digit', minute: '2-digit' })}</td><td>{fixture.league}</td><td><b>{fixture.home}</b> vs <b>{fixture.away}</b></td><td>{fixture.status}</td><td><button type="button" onClick={() => void chooseApiFixture(fixture, false)}>API အစဉ်အတိုင်း</button><button type="button" className="secondary" onClick={() => void chooseApiFixture(fixture, true)}>ဘယ်/ညာ ပြောင်းချိတ်</button></td></tr>)}{visible.length === 0 && <tr><td colSpan={5} className="empty">ကိုက်ညီသော fixture မတွေ့ပါ။ English အသင်းနာမည် တစ်စိတ်တစ်ပိုင်းဖြင့် ရှာပါ။</td></tr>}</tbody></table></div></section></main>;
   }
   if (!store) return <main className="loading">Football Bet POS ဖွင့်နေသည်…</main>;
-  return <main><header><div><p className="eyebrow">OFFLINE DESKTOP POS</p><h1>Football Bet POS</h1></div><div className="workspace-picker" style={{ display: 'flex', gap: '10px', alignItems: 'flex-end', flexWrap: 'wrap' }}><div className="day-picker"><label>ဒိုင် / Channel<select value={activeBookmaker} onChange={e => { setActiveBookmaker(e.target.value); resetBetForm(); resetMatchForm(); }}>{enabledChannels.map(channel => <option value={channel.id} key={channel.id}>{channel.name}</option>)}</select></label><small>Match နှင့် လောင်းကြေး သီးခြားထားသည်</small></div><div className="day-picker"><label>အလုပ်လုပ်မည့်ရက်<input type="date" value={activeDate} onChange={e => { setActiveDate(e.target.value); resetBetForm(); resetMatchForm(); }}/></label><small>ရက်ပြောင်းလျှင် စာရင်းများ မပေါင်းပါ</small></div></div><nav>{([['matches','Matches & Rules'],['ledger','လောင်းမှတ်တမ်း'],['report','Daily Report'],['settings','Settings']] as const).map(([id, text]) => <button key={id} className={page === id ? 'active' : ''} onClick={() => setPage(id)}>{text}</button>)}</nav></header>{notice && <div className="notice">{notice}</div>}<div className="page-content">
+  return <main><header><div><p className="eyebrow">OFFLINE DESKTOP POS</p><h1>Football Bet POS</h1></div><div className="workspace-picker" style={{ display: 'flex', gap: '10px', alignItems: 'flex-end', flexWrap: 'wrap' }}><div className="day-picker"><label>ဒိုင် / Channel<select value={activeBookmaker} onChange={e => { setActiveBookmaker(e.target.value); resetBetForm(); resetMatchForm(); }}>{enabledChannels.map(channel => <option value={channel.id} key={channel.id}>{channel.name}</option>)}</select></label><small>Match နှင့် လောင်းကြေး သီးခြားထားသည်</small></div><div className="day-picker"><label>အလုပ်လုပ်မည့်ရက်<input type="date" value={activeDate} onChange={e => { setActiveDate(e.target.value); resetBetForm(); resetMatchForm(); }}/></label><small>ရက်ပြောင်းလျှင် စာရင်းများ မပေါင်းပါ</small></div></div><nav>{([['matches','Matches & Rules'],['ledger','လောင်းမှတ်တမ်း'],['report','Daily Report'],['analytics','Analytics'],['settings','Settings']] as const).map(([id, text]) => <button key={id} className={page === id ? 'active' : ''} onClick={() => setPage(id)}>{text}</button>)}</nav></header>{notice && <div className="notice">{notice}</div>}<div className="page-content">
   {page === 'matches' && <section className="grid"><article className="card form-card"><h2>Match အသစ်နှင့် Rule သတ်မှတ်ရန်</h2><p className="muted">{activeDate} အတွက် match ထည့်နေသည်။ အသင်းများကို Settings → Team list မှာ အရင်သတ်မှတ်ပြီး short code ဖြင့် Quick Entry သုံးနိုင်သည်။</p>{teams.length === 0 && <div className="team-warning">Team list မရှိသေးပါ။ Settings မှာ အသင်းနှင့် short code အရင်ထည့်ပါ။</div>}<form onSubmit={addMatch}><div className="form-grid"><label>Time<input type="time" value={matchForm.time} onChange={e => setMatchForm({ ...matchForm, time: e.target.value })}/></label><TeamSelect label="ဘယ်အသင်း" value={matchForm.home} teams={teams} onChange={home => setMatchForm({ ...matchForm, home })}/><TeamSelect label="ညာအသင်း" value={matchForm.away} teams={teams} onChange={away => setMatchForm({ ...matchForm, away })}/></div>{matchForm.rules.map((rule, index) => <div className="rule-box" key={rule.id}><div className="rule-head"><b>{index + 1}. Flexible rule</b>{matchForm.rules.length > 1 && <button type="button" className="link danger" onClick={() => setMatchForm({ ...matchForm, rules: matchForm.rules.filter(x => x.id !== rule.id) })}>ဖျက်</button>}</div><RuleEditor rule={rule} home={matchForm.home} away={matchForm.away} onChange={next => setMatchForm({ ...matchForm, rules: matchForm.rules.map(x => x.id === rule.id ? next : x) })}/></div>)}<button type="button" className="secondary" onClick={() => setMatchForm({ ...matchForm, rules: [...matchForm.rules, defaultRule('body')] })}>+ Rule ထပ်ထည့်</button><button type="submit">Match သိမ်းမည်</button></form></article><article className="card scroll-list-card"><h2>{activeDate} Match များ</h2><div className="match-list-toolbar"><div className="match-list-search"><input value={matchListSearch} onChange={e => setMatchListSearch(e.target.value)} placeholder="🔍 Team name/code, time, league သို့ rule code ရှာရန်"/>{matchListSearch && <button type="button" className="link" onClick={() => setMatchListSearch('')}>ရှင်းမည်</button>}</div><span>{visibleMatchCards.length} / {dayMatches.length} ပွဲ</span></div><div className="card-scroll">{dayMatches.length === 0 ? <p className="muted">ဤရက်အတွက် Match မရှိသေးပါ။ ရက်ဟောင်း data မပေါင်းပါ။</p> : visibleMatchCards.length === 0 ? <p className="empty">“{matchListSearch}” နှင့်ကိုက်ညီသော Match မတွေ့ပါ။</p> : visibleMatchCards.map(m => <MatchCard key={m.id} match={m} onSave={saveResult}/>)}</div></article></section>}
   {page === 'ledger' && (
     <section className="grid">
@@ -1871,6 +2034,325 @@ export function App() {
   {page === 'settings' && settingsTab === 'report' && <section className="card settings-tab-card"><p className="eyebrow">CURRENT DATE DATA</p><h2>{activeDate} · {activeChannel?.name ?? activeBookmaker}</h2><p className="muted">Match {dayMatches.length} ပွဲနှင့် လောင်းမှတ်တမ်း {dayBets.length} ခုကို ရွေးထားသော channel သို့ ရွှေ့နိုင်သည်၊ သို့မဟုတ် မူရင်းကိုထားပြီး copy ကူးနိုင်သည်။</p><label className="transfer-destination">ပို့မည့် Channel<select value={transferDestination} onChange={e => setTransferDestination(e.target.value)}>{otherChannels.map(channel => <option key={channel.id} value={channel.id}>{channel.name}</option>)}</select></label><button type="button" disabled={!transferDestination} onClick={() => void transferDayData('move')}>ရွေးထားသော Channel သို့ ရွှေ့မည်</button><button type="button" className="secondary" disabled={!transferDestination} onClick={() => void transferDayData('copy')}>မူရင်းထားပြီး Copy ကူးမည်</button></section>}
   {page === 'settings' && settingsTab === 'report' && <section className="card settings-tab-card transfer-file-card"><p className="eyebrow">DEVICE TRANSFER</p><h2>.fbpos Import / Export</h2><p className="muted">လက်ရှိရွေးထားသော <b>{activeChannel?.name ?? activeBookmaker}</b> · <b>{activeDate}</b> data ကို transfer လုပ်သည်။ Commission၊ voice files၊ API key၊ automation နှင့် Viber setting မပါပါ။</p><button type="button" disabled={transferBusy || (!dayMatches.length && !dayBets.length)} onClick={() => void exportTransferFile()}>{transferBusy ? 'လုပ်ဆောင်နေသည်…' : '⬆ .fbpos Export'}</button><button type="button" className="secondary" disabled={transferBusy} onClick={() => void chooseTransferFile()}>{transferBusy ? 'ဖတ်နေသည်…' : '⬇ .fbpos Import ရွေးမည်'}</button>{transferPreview && <div className="transfer-preview"><div className="transfer-preview-head"><b>Import Preview</b><span>Target: {activeChannel?.name ?? activeBookmaker} · {activeDate}</span></div>{transferPreview.packageData.sourceDate !== activeDate && <div className="transfer-date-warning">မူရင်းရက် {transferPreview.packageData.sourceDate} ကို ရွေးထားသော {activeDate} သို့ ပြောင်းထည့်မည်။</div>}<div className="transfer-counts"><span>Teams <b>{transferPreview.teamPlans.filter(plan => !plan.existing).length} new</b> / {transferPreview.teamPlans.filter(plan => plan.existing).length} existing</span><span>Matches <b>{transferPreview.newMatches} new</b> / {transferPreview.duplicateMatches} duplicate</span><span>Records <b>{transferPreview.newBets} new</b> / {transferPreview.duplicateBets} duplicate</span></div>{transferPreview.teamPlans.some(plan => !plan.existing) && <div className="transfer-team-codes"><b>အသစ်ထည့်မည့် Team short codes</b>{transferPreview.teamPlans.filter(plan => !plan.existing).map(plan => <label key={plan.source.id}><span>{plan.source.name}</span><input value={plan.code} maxLength={12} onChange={e => updateImportTeamCode(plan.source.id, e.target.value)}/></label>)}</div>}<div className="transfer-preview-actions"><button type="button" className="secondary" onClick={() => setTransferPreview(null)}>မလုပ်တော့ပါ</button><button type="button" disabled={transferBusy} onClick={() => void confirmTransferImport()}>Backup ယူပြီး Import မည်</button></div></div>}</section>}
   {page === 'report' && <section className="card report"><div className="report-head"><div><p className="eyebrow">{(activeChannel?.name ?? activeBookmaker).toUpperCase()} DAILY SETTLEMENT · {store.settings.view === 'dai' ? 'ဒိုင် View' : 'Player View'}</p><h2>{activeDate} စာရင်း</h2></div><div><button className="secondary" onClick={async () => { if (await window.footballPos.data.exportCsv(csvRows())) flash('Excel CSV export ပြီးပါပြီ။'); }}>Excel CSV ထုတ်</button><button onClick={() => void exportPdf()}>PDF ထုတ်</button></div></div><LedgerTable rows={reportSettlements} settings={activeCommission} view={store.settings.view} totals={reportTotals} sortable sortMode={reportSortMode} onSortModeChange={setReportSortMode}/><SummaryPanel totals={reportTotals}/></section>}
+  {page === 'analytics' && analyticsData && (() => {
+    const { activeChannelIds, matchOptions, effectiveMatchKey, filteredSettlements, channelRows, overallTotals, settledCount, pendingCount, matchRows } = analyticsData;
+    const signedFmt = (v: number) => `${v > 0 ? '+' : v < 0 ? '-' : ''}${money(v)}`;
+    const matchQuery = analyticsMatchSearch.trim().toLowerCase();
+    const visibleMatchOptions = matchQuery
+      ? matchOptions.filter(opt => `${opt.home} ${opt.away} ${opt.apiLeague ?? ''} ${opt.time} ${opt.date}`.toLowerCase().includes(matchQuery))
+      : matchOptions;
+    const detailQuery = analyticsDetailSearch.trim().toLowerCase();
+    const detailRows = detailQuery
+      ? filteredSettlements.filter(s =>
+        `${s.bet.note} ${s.match.home} ${s.match.away} ${channelName(store, s.bet.bookmaker)} ${s.rule.code} ${selectionLabel(s)}`.toLowerCase().includes(detailQuery)
+      )
+      : filteredSettlements;
+
+    return <section className="analytics-page">
+      <div className="card analytics-header-card">
+        <div className="analytics-head">
+          <div>
+            <p className="eyebrow">OVERALL ANALYTICS · {effectiveAnalyticsView === 'dai' ? 'ဒိုင် VIEW' : 'PLAYER VIEW'}</p>
+            <h2>Channel အားလုံး စုစုပေါင်း စာရင်းချုပ်</h2>
+          </div>
+          <div className="analytics-view-toggle" role="group" aria-label="Analytics view mode">
+            <button type="button" className={effectiveAnalyticsView === 'dai' ? 'selected' : ''} onClick={() => setAnalyticsView('dai')}>ဒိုင် View</button>
+            <button type="button" className={effectiveAnalyticsView === 'player' ? 'selected' : ''} onClick={() => setAnalyticsView('player')}>Player View</button>
+          </div>
+        </div>
+
+        <div className="analytics-filters">
+          <div className="analytics-filter-group">
+            <span className="analytics-filter-label">ရက်စွဲ (Date Scope)</span>
+            <div className="analytics-pill-row">
+              <button type="button" className={`rule-pill ${analyticsDateMode === 'day' ? 'selected' : ''}`} onClick={() => setAnalyticsDateMode('day')}>လက်ရှိရက် ({activeDate})</button>
+              <button type="button" className={`rule-pill ${analyticsDateMode === 'range' ? 'selected' : ''}`} onClick={() => { setAnalyticsDateMode('range'); setAnalyticsFrom(activeDate); setAnalyticsTo(activeDate); }}>ရက်အပိုင်းအခြား</button>
+              <button type="button" className={`rule-pill ${analyticsDateMode === 'all' ? 'selected' : ''}`} onClick={() => setAnalyticsDateMode('all')}>ရက်အားလုံး</button>
+            </div>
+            {analyticsDateMode === 'range' && (
+              <div className="analytics-date-range">
+                <label>မှ<input type="date" value={analyticsFrom} onChange={e => setAnalyticsFrom(e.target.value)}/></label>
+                <label>အထိ<input type="date" value={analyticsTo} onChange={e => setAnalyticsTo(e.target.value)}/></label>
+              </div>
+            )}
+          </div>
+
+          <div className="analytics-filter-group">
+            <div className="analytics-filter-head">
+              <span className="analytics-filter-label">ဒိုင် / Channel များ ({activeChannelIds.size}/{enabledChannels.length})</span>
+              {analyticsChannelFilter !== null && (
+                <button type="button" className="link" onClick={() => setAnalyticsChannelFilter(null)}>အားလုံးရွေးမည်</button>
+              )}
+            </div>
+            <div className="viber-channel-chips">
+              {enabledChannels.map(ch => {
+                const isChecked = activeChannelIds.has(ch.id);
+                return (
+                  <label key={ch.id} className={`viber-channel-chip ${isChecked ? 'active' : ''}`}>
+                    <input
+                      type="checkbox"
+                      checked={isChecked}
+                      onChange={e => {
+                        const current = [...activeChannelIds];
+                        const next = e.target.checked
+                          ? [...new Set([...current, ch.id])]
+                          : current.filter(id => id !== ch.id);
+                        setAnalyticsChannelFilter(next);
+                      }}
+                    />
+                    <span>{ch.name}</span>
+                  </label>
+                );
+              })}
+            </div>
+          </div>
+
+          <div className="analytics-filter-group analytics-match-filter">
+            <div className="analytics-filter-head">
+              <span className="analytics-filter-label">Match Filter ({matchOptions.length} ပွဲ)</span>
+              {effectiveMatchKey !== 'all' && (
+                <button type="button" className="link danger" onClick={() => setAnalyticsMatchKey('all')}>✕ Match Filter ရှင်းမည်</button>
+              )}
+            </div>
+            <div className="analytics-match-controls">
+              <input
+                type="text"
+                value={analyticsMatchSearch}
+                onChange={e => setAnalyticsMatchSearch(e.target.value)}
+                placeholder="🔍 Match / အသင်းနာမည် ရှာရန်..."
+              />
+              <select value={effectiveMatchKey} onChange={e => setAnalyticsMatchKey(e.target.value)}>
+                <option value="all">-- ပွဲအားလုံး ({matchOptions.length} ပွဲ) --</option>
+                {visibleMatchOptions.map(opt => (
+                  <option key={opt.key} value={opt.key}>
+                    {analyticsDateMode !== 'day' ? `${opt.date} · ` : ''}{opt.time} · {opt.home} vs {opt.away} [{opt.resultText}] ({opt.betsCount} ခု · {money(opt.stake)} Ks)
+                  </option>
+                ))}
+              </select>
+            </div>
+          </div>
+        </div>
+      </div>
+
+      <div className="analytics-kpi-grid">
+        <div className="card analytics-kpi">
+          <span>စုစုပေါင်း ထိုးငွေ (Total Stake)</span>
+          <strong>{money(overallTotals.betAmount)} Ks</strong>
+          <small>Record {filteredSettlements.length} ခု · ပြီး {settledCount} · Pending {pendingCount}</small>
+        </div>
+        <div className="card analytics-kpi">
+          <span>Gross WIN / LOSE</span>
+          <div className="analytics-kpi-split">
+            <b className="win">+{money(overallTotals.grossWin)}</b>
+            <b className="loss">-{money(overallTotals.grossLoss)}</b>
+          </div>
+          <small>Net WIN {signedFmt(overallTotals.netWin)} · Net LOSE {signedFmt(overallTotals.netLoss)}</small>
+        </div>
+        <div className="card analytics-kpi">
+          <span>Commission & Adjustments</span>
+          <strong className={overallTotals.winCom + overallTotals.loseCom + overallTotals.commissionEffect >= 0 ? 'win' : 'loss'}>
+            {signedFmt(overallTotals.winCom + overallTotals.loseCom + overallTotals.commissionEffect)} Ks
+          </strong>
+          <small>WIN Com {signedFmt(overallTotals.winCom)} · LOSE Com {signedFmt(overallTotals.loseCom)} · Turnover Com {signedFmt(overallTotals.commissionEffect)}</small>
+        </div>
+        <div className={`card analytics-kpi analytics-kpi-total ${overallTotals.total > 0 ? 'positive' : overallTotals.total < 0 ? 'negative' : ''}`}>
+          <span>Combined Net TOTAL</span>
+          <strong>{signedFmt(overallTotals.total)} Ks</strong>
+          <small>{effectiveAnalyticsView === 'dai' ? 'ဒိုင်ဘက် စုစုပေါင်း အသားတင်' : 'Player ဘက် စုစုပေါင်း အသားတင်'}</small>
+        </div>
+      </div>
+
+      <div className="card">
+        <div className="analytics-section-head">
+          <h2>Channel အလိုက် နှိုင်းယှဉ်ချက်</h2>
+          <span className="muted">Channel တစ်ခုချင်းစီ၏ သက်ဆိုင်ရာ commission rule အတိုင်း တွက်ချက်ထားသည်</span>
+        </div>
+        <div className="table-wrap">
+          <table>
+            <thead>
+              <tr>
+                <th>Channel / ဒိုင်</th>
+                <th>Rule Mode</th>
+                <th>Records</th>
+                <th>ထိုးငွေ</th>
+                <th>WIN (Gross)</th>
+                <th>LOSE (Gross)</th>
+                <th>Com / Adj</th>
+                <th>Net TOTAL</th>
+              </tr>
+            </thead>
+            <tbody>
+              {channelRows.length === 0 ? (
+                <tr><td colSpan={8} className="empty">Channel ရွေးချယ်ထားခြင်းမရှိပါ</td></tr>
+              ) : channelRows.map(({ channel, settings, items, totals: t, settledCount: sc, pendingCount: pc }) => (
+                <tr key={channel.id}>
+                  <td><b>{channel.name}</b></td>
+                  <td><small style={{ marginTop: 0 }}>{settings.mode === 'direct' ? `Direct (${settings.playerWinDeduction}% / ${settings.playerLossRebate}%)` : `Summary (${settings.winTaxRate}% / ${settings.turnoverCommissionRate}%)`}</small></td>
+                  <td>{items.length} ခု <small style={{ marginTop: 0 }}>({sc} ပြီး{pc ? ` · ${pc} Pending` : ''})</small></td>
+                  <td>{money(t.betAmount)}</td>
+                  <td className="win">{t.grossWin ? `+${money(t.grossWin)}` : '0'}</td>
+                  <td className="loss">{t.grossLoss ? `-${money(t.grossLoss)}` : '0'}</td>
+                  <td className={t.winCom + t.loseCom + t.commissionEffect >= 0 ? 'win' : 'loss'}>
+                    {signedFmt(t.winCom + t.loseCom + t.commissionEffect)}
+                  </td>
+                  <td className={t.total > 0 ? 'win' : t.total < 0 ? 'loss' : ''}><b>{signedFmt(t.total)}</b></td>
+                </tr>
+              ))}
+            </tbody>
+            {channelRows.length > 0 && (
+              <tfoot>
+                <tr className="table-total-row">
+                  <td colSpan={2}>TOTAL ({channelRows.length} Channels)</td>
+                  <td>{filteredSettlements.length} ခု</td>
+                  <td>{money(overallTotals.betAmount)}</td>
+                  <td className="win">+{money(overallTotals.grossWin)}</td>
+                  <td className="loss">-{money(overallTotals.grossLoss)}</td>
+                  <td className={overallTotals.winCom + overallTotals.loseCom + overallTotals.commissionEffect >= 0 ? 'win' : 'loss'}>
+                    {signedFmt(overallTotals.winCom + overallTotals.loseCom + overallTotals.commissionEffect)}
+                  </td>
+                  <td className={overallTotals.total > 0 ? 'win' : overallTotals.total < 0 ? 'loss' : ''}>
+                    <b>{signedFmt(overallTotals.total)}</b>
+                  </td>
+                </tr>
+              </tfoot>
+            )}
+          </table>
+        </div>
+      </div>
+
+      <div className="card">
+        <div className="analytics-section-head">
+          <h2>Match အလိုက် စာရင်းချုပ် & Side Exposure ({matchRows.length} ပွဲ)</h2>
+          <span className="muted">Match Row ကို နှိပ်၍ ထိုပွဲတစ်ပွဲတည်း၏ Channel အလိုက် အခြေအနေကို Filter ကြည့်နိုင်သည်</span>
+        </div>
+        <div className="table-wrap">
+          <table>
+            <thead>
+              <tr>
+                <th>Time</th>
+                <th>Match</th>
+                <th>Result</th>
+                <th>Records</th>
+                <th>ထိုးငွေ</th>
+                <th>BD (ဘယ် / ညာ)</th>
+                <th>O/U (Up / Down)</th>
+                <th>WIN / LOSE</th>
+                <th>Net TOTAL</th>
+                <th>Filter</th>
+              </tr>
+            </thead>
+            <tbody>
+              {matchRows.length === 0 ? (
+                <tr><td colSpan={10} className="empty">ရွေးထားသော filter အတွက် match မှတ်တမ်းမရှိပါ</td></tr>
+              ) : matchRows.map(row => (
+                <tr key={row.key} className={effectiveMatchKey === row.key ? 'analytics-selected-row' : undefined}>
+                  <td>{analyticsDateMode !== 'day' ? `${row.date} ` : ''}{row.time}</td>
+                  <td>
+                    <b>{row.home}</b> vs <b>{row.away}</b>
+                    <div className="analytics-match-channels">
+                      {[...row.channels].map(chId => (
+                        <span key={chId} className="analytics-channel-tag">{channelName(store, chId)}</span>
+                      ))}
+                    </div>
+                  </td>
+                  <td>{row.resultText}</td>
+                  <td>{row.settlements.length} ခု</td>
+                  <td><b>{money(row.totals.betAmount)}</b></td>
+                  <td>
+                    <small style={{ marginTop: 0 }}>
+                      {row.bdHomeStake || row.bdAwayStake ? `${money(row.bdHomeStake)} / ${money(row.bdAwayStake)}` : '—'}
+                    </small>
+                  </td>
+                  <td>
+                    <small style={{ marginTop: 0 }}>
+                      {row.ouUpStake || row.ouDownStake ? `${money(row.ouUpStake)} / ${money(row.ouDownStake)}` : '—'}
+                    </small>
+                  </td>
+                  <td>
+                    <span className="win">+{money(row.totals.grossWin)}</span>
+                    {' / '}
+                    <span className="loss">-{money(row.totals.grossLoss)}</span>
+                  </td>
+                  <td className={row.totals.total > 0 ? 'win' : row.totals.total < 0 ? 'loss' : ''}>
+                    <b>{signedFmt(row.totals.total)}</b>
+                  </td>
+                  <td>
+                    {effectiveMatchKey === row.key ? (
+                      <button type="button" className="table-action delete" onClick={() => setAnalyticsMatchKey('all')}>✕ ဖြုတ်</button>
+                    ) : (
+                      <button type="button" className="table-action" onClick={() => setAnalyticsMatchKey(row.key)}>Filter</button>
+                    )}
+                  </td>
+                </tr>
+              ))}
+            </tbody>
+          </table>
+        </div>
+      </div>
+
+      <div className="card">
+        <div className="analytics-section-head">
+          <h2>အသေးစိတ် မှတ်တမ်းများ ({detailRows.length})</h2>
+          <input
+            type="text"
+            className="table-search-input"
+            placeholder="🔍 မှတ်ချက် / Channel / အသင်း ရှာရန်..."
+            value={analyticsDetailSearch}
+            onChange={e => setAnalyticsDetailSearch(e.target.value)}
+          />
+        </div>
+        <div className="table-wrap">
+          <table>
+            <thead>
+              <tr>
+                <th>No.</th>
+                <th>Channel</th>
+                <th>မှတ်ချက်</th>
+                <th>Match / Rule</th>
+                <th>ထိုးငွေ</th>
+                <th>Result</th>
+                <th>WIN</th>
+                <th>LOSE</th>
+                <th>Com</th>
+                <th>Final</th>
+                <th>Status</th>
+              </tr>
+            </thead>
+            <tbody>
+              {detailRows.length === 0 ? (
+                <tr><td colSpan={11} className="empty">မှတ်တမ်းမရှိပါ</td></tr>
+              ) : detailRows.map((s, idx) => {
+                const chSettings = getChannelSettings(store, s.bet.bookmaker);
+                const res = viewResult(s, chSettings, effectiveAnalyticsView);
+                return (
+                  <tr key={s.bet.id}>
+                    <td>{idx + 1}</td>
+                    <td><span className="analytics-channel-tag">{channelName(store, s.bet.bookmaker)}</span></td>
+                    <td>{s.bet.note || '—'}</td>
+                    <td>
+                      <b>{s.match.home}</b> vs <b>{s.match.away}</b>
+                      <small>{selectionLabel(s)} · {usedRuleLabel(s)}</small>
+                    </td>
+                    <td>{money(s.bet.amount)}</td>
+                    <td>{s.match.postponed ? 'P:P' : s.match.homeScore === null ? '—' : `${s.match.homeScore}:${s.match.awayScore}`}</td>
+                    <td className="win">{res.gross > 0 ? money(res.gross) : ''}</td>
+                    <td className="loss">{res.gross < 0 ? `-${money(res.gross)}` : ''}</td>
+                    <td className={res.adjustment > 0 ? 'win' : res.adjustment < 0 ? 'loss' : ''}>
+                      {res.adjustment ? signedFmt(res.adjustment) : ''}
+                    </td>
+                    <td className={res.final > 0 ? 'win' : res.final < 0 ? 'loss' : ''}>
+                      {res.final ? signedFmt(res.final) : '—'}
+                    </td>
+                    <td>{s.label === 'Pending' ? 'Pending' : s.band.outcome === 'refund' ? 'Refund' : res.finalLabel}</td>
+                  </tr>
+                );
+              })}
+            </tbody>
+          </table>
+        </div>
+      </div>
+    </section>;
+  })()}
   {page === 'settings' && (settingsTab === 'report' || settingsTab === 'matches') && <section className={`settings-page settings-page-${settingsTab}`}>
     {settingsTab === 'report' && <article className="card settings">
       <h2>{activeChannel?.name ?? activeBookmaker} Report Settings</h2>
