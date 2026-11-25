@@ -106,6 +106,7 @@ export interface Store {
     viberDelivery: {
       groupName: string;
       autoSend: boolean;
+      targetChannels?: string[];
       sentReports: string[];
       pendingReports: string[];
       lastStatus: 'idle' | 'sent' | 'failed';

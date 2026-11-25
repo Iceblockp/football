@@ -10,7 +10,7 @@ import type { ApiFixture, BookmakerSettings, Channel, CommonVoiceKey, Store, Tea
 const defaultViberSettings = (): BookmakerSettings => ({ mode: 'direct', playerWinDeduction: 3, playerLossRebate: 2, winTaxRate: 0, turnoverCommissionRate: 0 });
 const defaultMessengerSettings = (): BookmakerSettings => ({ mode: 'summary', playerWinDeduction: 0, playerLossRebate: 0, winTaxRate: 5, turnoverCommissionRate: 2 });
 const defaultAutomation = () => ({ enabled: false, pollMinutes: 10, windowStart: '00:00', windowEnd: '06:00', autoExportPdf: true, exportedReports: [] as string[] });
-const defaultViberDelivery = () => ({ groupName: '', autoSend: false, sentReports: [] as string[], pendingReports: [] as string[], lastStatus: 'idle' as const, lastMessage: '' });
+const defaultViberDelivery = () => ({ groupName: '', autoSend: false, targetChannels: undefined as string[] | undefined, sentReports: [] as string[], pendingReports: [] as string[], lastStatus: 'idle' as const, lastMessage: '' });
 const defaultVoiceConfirmation = () => ({ enabled: true, rate: 1.35, commonClips: [] as CommonVoiceKey[] });
 const defaultChannels = (): Channel[] => [
   { id: 'viber', name: 'Viber ဒိုင်', enabled: true },
