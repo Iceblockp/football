@@ -440,6 +440,37 @@ function Choose-File($dialog, [string]$filePath) {
   else { Click-Element $openButton }
 }
 
+function Send-Attachment($context) {
+  $root = $context.Root
+  $windowRect = $context.WindowRect
+  # Give Viber time to build the attachment preview and enable its Send button.
+  Start-Sleep -Milliseconds 1300
+  $sendCandidates = @()
+  foreach ($button in (Find-Descendants $root ([System.Windows.Automation.ControlType]::Button))) {
+    $rect = Get-Rectangle $button
+    if (-not $rect -or $rect.Top -lt ($windowRect.Top + $windowRect.Height * 0.60)) { continue }
+    $label = (($button.Current.Name + ' ' + $button.Current.AutomationId + ' ' + $button.Current.HelpText)).ToLowerInvariant()
+    $score = 0
+    if ($label -match 'send') { $score += 1000 }
+    # The message Send button is always at the lower-right of the conversation.
+    $score += [int](($rect.Left - $windowRect.Left) / [Math]::Max(1, $windowRect.Width) * 100)
+    $score += [int](($rect.Top - $windowRect.Top) / [Math]::Max(1, $windowRect.Height) * 10)
+    $sendCandidates += [pscustomobject]@{ Element = $button; Rect = $rect; Score = $score; Label = $label }
+  }
+  $sendButton = ($sendCandidates | Sort-Object Score -Descending | Select-Object -First 1)
+  if ($sendButton -and $sendButton.Label -match 'send') {
+    $invokePattern = $null
+    if ($sendButton.Element.TryGetCurrentPattern([System.Windows.Automation.InvokePattern]::Pattern, [ref]$invokePattern)) {
+      $invokePattern.Invoke()
+    }
+    else { Click-Element $sendButton.Element }
+    return
+  }
+  # Viber's Qt controls can be invisible to UI Automation. This location is the
+  # circular Send control at the far right of the message composer.
+  Click-Point ($windowRect.Right - 45) ($windowRect.Bottom - 36)
+}
+
 try {
   $action = $env:FOOTBALL_POS_VIBER_ACTION
   $groupName = $env:FOOTBALL_POS_VIBER_GROUP
@@ -459,9 +490,9 @@ try {
     if (-not (Get-Rectangle $dialog)) { $dialogClosed = $true; break }
   }
   if (-not $dialogClosed) { throw 'Windows file picker မပိတ်သေးသောကြောင့် PDF မပို့ပါ။' }
-  Start-Sleep -Milliseconds 1400
   [FootballPosNative]::SetForegroundWindow($process.MainWindowHandle) | Out-Null
-  [System.Windows.Forms.SendKeys]::SendWait('{ENTER}')
+  Send-Attachment $context
+  Start-Sleep -Milliseconds 600
   Write-Output 'sent'
 } catch {
   [Console]::Error.WriteLine($_.Exception.Message)
