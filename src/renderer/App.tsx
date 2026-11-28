@@ -36,6 +36,12 @@ type ImportTeamPlan = { source: TransferTeam; existing?: Team; code: string };
 type TransferPreview = { packageData: TransferPackage; teamPlans: ImportTeamPlan[]; newMatches: number; duplicateMatches: number; newBets: number; duplicateBets: number };
 const normalizeApiName = (value: string) => value.toLowerCase().normalize('NFKD').replace(/[^a-z0-9]+/g, ' ').trim();
 const normalizeTeamName = (value: string) => value.normalize('NFKC').toLowerCase().replace(/\s+/g, '').trim();
+const uniqueImportCode = (requested: string, used: Set<string>) => {
+  const base = /^[a-z0-9]+$/.test(requested.trim().toLowerCase()) ? requested.trim().toLowerCase() : 'team';
+  let candidate = base; let suffix = 2;
+  while (used.has(candidate)) candidate = `${base}${suffix++}`;
+  used.add(candidate); return candidate;
+};
 const ruleFromCode = (market: Market, code: string): Rule => {
   const parsed = parseMyanmarOdds(code);
   if (!parsed) throw new Error(`Invalid ${market === 'body' ? 'BD' : 'O/U'} rule: ${code}`);
@@ -365,7 +371,8 @@ export function App() {
   const [betForm, setBetForm] = useState({ matchId: '', ruleId: '', selection: 'home' as Selection, note: '', amount: '', lateReceivedAt: '', lateReason: '' }); const [editingBetId, setEditingBetId] = useState<string | null>(null); const [insertAfterBetId, setInsertAfterBetId] = useState<string | null>(null); const [matchSearch, setMatchSearch] = useState(''); const [matchListSearch, setMatchListSearch] = useState(''); const [quickEntry, setQuickEntry] = useState(''); const [quickCandidates, setQuickCandidates] = useState<{ request: QuickRequest; matches: Match[] } | null>(null); const [teamForm, setTeamForm] = useState({ name: '', code: '', voiceName: '' }); const [teamSearch, setTeamSearch] = useState(''); const [editingTeamId, setEditingTeamId] = useState<string | null>(null); const [editingTeamCode, setEditingTeamCode] = useState(''); const [editingTeamVoiceName, setEditingTeamVoiceName] = useState(''); const [deletingAllTeams, setDeletingAllTeams] = useState(false); const [recordingTeamId, setRecordingTeamId] = useState<string | null>(null); const [recordingCommonKey, setRecordingCommonKey] = useState<CommonVoiceKey | null>(null); const [voiceClipBusyId, setVoiceClipBusyId] = useState<string | null>(null); const [commonVoiceBusyKey, setCommonVoiceBusyKey] = useState<CommonVoiceKey | null>(null); const [reportSortMode, setReportSortMode] = useState<'latest' | 'ledger'>('latest'); const [confirmation, setConfirmation] = useState<{ message: string; resolve: (confirmed: boolean) => void } | null>(null);
   const [apiKeyInput, setApiKeyInput] = useState(''); const [apiKeyConfigured, setApiKeyConfigured] = useState(false); const [apiMessage, setApiMessage] = useState(''); const [automationBusy, setAutomationBusy] = useState(false); const [nextAutomationCheckAt, setNextAutomationCheckAt] = useState<number | null>(null); const [automationClock, setAutomationClock] = useState(Date.now()); const [viberSendBusy, setViberSendBusy] = useState(false);
   const [fixturePicker, setFixturePicker] = useState<{ match: Match; fixtures: ApiFixture[]; searchDate: string } | null>(null); const [fixtureFilter, setFixtureFilter] = useState(''); const [fixturePickerLoading, setFixturePickerLoading] = useState(false);
-  const [bulkOpen, setBulkOpen] = useState(false); const [bulkJson, setBulkJson] = useState(''); const [bulkPreview, setBulkPreview] = useState<BulkPreview | null>(null); const [bulkError, setBulkError] = useState(''); const [bulkApiQueue, setBulkApiQueue] = useState<string[]>([]); const [bulkApiBusy, setBulkApiBusy] = useState(false);
+  const [bulkOpen, setBulkOpen] = useState(false); const [bulkJson, setBulkJson] = useState(''); const [bulkPreview, setBulkPreview] = useState<BulkPreview | null>(null); const [bulkError, setBulkError] = useState(''); const [bulkTargetChannels, setBulkTargetChannels] = useState<string[] | null>(null); const [bulkApiQueue, setBulkApiQueue] = useState<string[]>([]); const [bulkApiBusy, setBulkApiBusy] = useState(false);
+  const [cloneModalOpen, setCloneModalOpen] = useState(false); const [cloneTargets, setCloneTargets] = useState<string[]>([]); const [cloneSyncTeams, setCloneSyncTeams] = useState(true); const [cloneBackfillApi, setCloneBackfillApi] = useState(true); const [cloneBusy, setCloneBusy] = useState(false);
   const [transferPreview, setTransferPreview] = useState<TransferPreview | null>(null); const [transferBusy, setTransferBusy] = useState(false); const [teamShareBusy, setTeamShareBusy] = useState(false);
   const fixtureDateCache = useRef(new Map<string, ApiFixture[]>());
   const checkApiResultsRef = useRef<(manual?: boolean) => Promise<void>>(async () => undefined);
@@ -743,6 +750,52 @@ export function App() {
   };
   const resetMatchForm = () => { setEditingMatchId(null); setMatchForm({ time: '19:00', nextDay: false, home: '', away: '', rules: [defaultRule('body'), defaultRule('total')] }); };
   const addMatch = async (e: React.FormEvent) => { e.preventDefault(); if (!store || !matchForm.home.trim() || !matchForm.away.trim()) return flash('အသင်းနှစ်သင်းလုံး ထည့်ပါ။'); const previous = editingMatchId ? matches.find(x => x.id === editingMatchId) : undefined; const history = previous?.rules.filter(rule => rule.status === 'closed') ?? []; const provisionalIds = new Set(previous?.rules.filter(rule => rule.provisional).map(rule => rule.id) ?? []); const finalizedRules = previous ? matchForm.rules.map(rule => provisionalIds.has(rule.id) ? { ...rule, provisional: false } : rule) : matchForm.rules; const nextDayKickoff = matchForm.nextDay || matchForm.time < '06:00'; const updated: Match = { id: previous?.id || uid(), time: matchForm.time, rules: previous ? [...history, ...finalizedRules] : matchForm.rules, date: activeDate, bookmaker: previous?.bookmaker ?? activeBookmaker, home: matchForm.home.trim(), away: matchForm.away.trim(), homeScore: previous?.homeScore ?? null, awayScore: previous?.awayScore ?? null, postponed: previous?.postponed ?? false, kickoffAt: kickoffIso(activeDate, matchForm.time, nextDayKickoff), apiFixtureId: previous?.apiFixtureId, apiHome: previous?.apiHome, apiAway: previous?.apiAway, apiSidesReversed: previous?.apiSidesReversed, apiStatus: previous?.apiStatus, apiLeague: previous?.apiLeague, resultSource: previous?.resultSource, resultCheckedAt: previous?.resultCheckedAt }; const provisionalBets = previous ? bets.filter(bet => bet.matchId === previous.id && provisionalIds.has(bet.ruleId)) : []; if (provisionalBets.length && !await askConfirm(`Temporary rule ဖြင့် ထိုးထားသော record ${provisionalBets.length} ခုကို ယခု actual rule ဖြင့် update လုပ်မလား?`)) return; const refreshedBets = previous ? bets.map(bet => { const newRule = updated.rules.find(rule => rule.id === bet.ruleId); return newRule && provisionalIds.has(bet.ruleId) ? { ...bet, ruleSnapshot: structuredClone(newRule) } : bet; }) : bets; await save({ ...store, matches: previous ? matches.map(x => x.id === previous.id ? updated : x) : [...matches, updated], bets: refreshedBets }); resetMatchForm(); flash(previous && provisionalBets.length ? `Actual rule ကိုအတည်ပြုပြီး record ${provisionalBets.length} ခုကို update လုပ်ပြီးပါပြီ။` : previous ? 'Active rule များကို ပြင်ပြီးပါပြီ။ ပိတ်ထားသော rule history မပြောင်းပါ။' : nextDayKickoff ? `Match ကို ${nextDate(activeDate)} မနက်အစောပိုင်း kickoff အဖြစ် သိမ်းပြီးပါပြီ။` : 'Match နှင့် temporary default rule များကို သိမ်းပြီးပါပြီ။'); };
+  const effectiveBulkTargets = useMemo(
+    () => (bulkTargetChannels ?? [activeBookmaker]).filter(id => enabledChannels.some(c => c.id === id)),
+    [bulkTargetChannels, activeBookmaker, enabledChannels]
+  );
+  const ensureTeamsInChannel = async (allTeamsList: Team[], sourceTeams: Team[], destinationId: Bookmaker) => {
+    let nextTeams = [...allTeamsList];
+    const destinationTeams = () => nextTeams.filter(team => team.bookmaker === destinationId);
+    const usedCodes = new Set(destinationTeams().map(team => team.code.toLowerCase()));
+    const nameMap = new Map<string, string>();
+    let created = 0; let updated = 0; let copiedVoices = 0;
+    for (const source of sourceTeams) {
+      let target = destinationTeams().find(team =>
+        (team.sourceId ?? team.id) === (source.sourceId ?? source.id)
+        || Boolean(source.apiTeamId && team.apiTeamId === source.apiTeamId)
+        || normalizeTeamName(team.name) === normalizeTeamName(source.name));
+      if (!target) {
+        const id = uid();
+        const voiceCopied = source.hasVoiceClip ? await window.footballPos.teamVoice.copy(source.id, id) : false;
+        target = {
+          ...structuredClone(source),
+          id,
+          sourceId: source.sourceId ?? source.id,
+          bookmaker: destinationId,
+          code: uniqueImportCode(source.code, usedCodes),
+          hasVoiceClip: voiceCopied,
+        };
+        nextTeams.push(target);
+        created += 1;
+        copiedVoices += voiceCopied ? 1 : 0;
+        nameMap.set(normalizeTeamName(source.name), target.name);
+        continue;
+      }
+      nameMap.set(normalizeTeamName(source.name), target.name);
+      let changed = false;
+      let nextTarget = target;
+      if (!nextTarget.sourceId) { nextTarget = { ...nextTarget, sourceId: source.sourceId ?? source.id }; changed = true; }
+      if (!nextTarget.apiTeamId && source.apiTeamId) { nextTarget = { ...nextTarget, apiTeamId: source.apiTeamId }; changed = true; }
+      if (!nextTarget.apiName && source.apiName) { nextTarget = { ...nextTarget, apiName: source.apiName }; changed = true; }
+      if (!nextTarget.voiceName && source.voiceName) { nextTarget = { ...nextTarget, voiceName: source.voiceName }; changed = true; }
+      if (!nextTarget.hasVoiceClip && source.hasVoiceClip && await window.footballPos.teamVoice.copy(source.id, nextTarget.id)) {
+        nextTarget = { ...nextTarget, hasVoiceClip: true }; changed = true; copiedVoices += 1;
+      }
+      if (changed) { nextTeams = nextTeams.map(team => team.id === nextTarget.id ? nextTarget : team); updated += 1; }
+    }
+    return { nextTeams, created, updated, copiedVoices, nameMap };
+  };
   const parseBulkMatches = () => {
     setBulkError(''); setBulkPreview(null);
     try {
@@ -769,16 +822,21 @@ export function App() {
         const key = `${row.nextDay}:${row.time}:${row.teams[0]}:${row.teams[1]}`.toLowerCase();
         if (rowKeys.has(key)) throw new Error(`Row ${index + 1}: JSON ထဲတွင် match ထပ်နေပါသည်။`);
         rowKeys.add(key);
-        const kickoff = kickoffIso(activeDate, row.time, row.nextDay);
-        if (dayMatches.some(match => (match.kickoffAt === kickoff || (match.time === row.time && kickoffLocalDate(match.kickoffAt) === kickoffLocalDate(kickoff))) && match.home === row.teams[0] && match.away === row.teams[1])) throw new Error(`Row ${index + 1}: ${row.teams[0]} vs ${row.teams[1]} ကို ထည့်ပြီးသားဖြစ်သည်။`);
       });
       const missingCodes: Record<string, string> = {};
-      [...new Set(rows.flatMap(row => row.teams))].filter(name => !teams.some(team => team.name === name)).forEach(name => { missingCodes[name] = ''; });
+      [...new Set(rows.flatMap(row => row.teams))]
+        .filter(name => !teams.some(team => normalizeTeamName(team.name) === normalizeTeamName(name)))
+        .forEach(name => {
+          const fromOther = allTeams.find(team => normalizeTeamName(team.name) === normalizeTeamName(name));
+          missingCodes[name] = fromOther?.code ?? '';
+        });
+      setBulkTargetChannels(current => current ?? [activeBookmaker]);
       setBulkPreview({ rows, missingCodes });
     } catch (error) { setBulkError(error instanceof Error ? error.message : 'JSON ကိုဖတ်မရပါ။'); }
   };
   const saveBulkMatches = async () => {
     if (!store || !bulkPreview) return;
+    if (!effectiveBulkTargets.length) return setBulkError('ထည့်သွင်းမည့် Channel အနည်းဆုံး ၁ ခု ရွေးချယ်ပါ။');
     const entries = Object.entries(bulkPreview.missingCodes);
     const normalizedCodes = entries.map(([name, code]) => [name, code.trim().toLowerCase().replace(/\s+/g, '')] as const);
     const invalid = normalizedCodes.find(([, code]) => !/^[a-z0-9]+$/.test(code));
@@ -800,15 +858,200 @@ export function App() {
       }
     }
     if (duplicateEntries.length > 0) return setBulkError(`Short code ထပ်နေပါသည်: ${duplicateEntries.join(' · ')}။ မတူသော code များသုံးပါ။`);
-    const newTeams: Team[] = normalizedCodes.map(([name, code]) => ({ id: uid(), bookmaker: activeBookmaker, name, code }));
-    const createdMatches: Match[] = bulkPreview.rows.map(row => ({
-      id: uid(), date: activeDate, bookmaker: activeBookmaker, time: row.time, home: row.teams[0], away: row.teams[1],
-      homeScore: null, awayScore: null, postponed: false, kickoffAt: kickoffIso(activeDate, row.time, row.nextDay),
-      rules: [...(row.bd ? [ruleFromCode('body', row.bd)] : []), ...(row.ou ? [ruleFromCode('total', row.ou)] : [])],
-    }));
-    await save({ ...store, teams: [...allTeams, ...newTeams], matches: [...matches, ...createdMatches] });
+
+    const activeNewTeams: Team[] = normalizedCodes.map(([name, code]) => {
+      const donor = allTeams.find(team => normalizeTeamName(team.name) === normalizeTeamName(name));
+      return {
+        id: uid(),
+        bookmaker: activeBookmaker,
+        name,
+        code,
+        ...(donor?.voiceName ? { voiceName: donor.voiceName } : {}),
+        ...(donor?.apiTeamId ? { apiTeamId: donor.apiTeamId } : {}),
+        ...(donor?.apiName ? { apiName: donor.apiName } : {}),
+      };
+    });
+    const referencedNames = new Set(bulkPreview.rows.flatMap(row => row.teams.map(normalizeTeamName)));
+    const sourcePool = [...teams, ...activeNewTeams].filter(team => referencedNames.has(normalizeTeamName(team.name)));
+
+    let workingTeams = [...allTeams];
+    let workingMatches = [...matches];
+    let totalCreatedMatches = 0;
+    let totalNewTeams = 0;
+    let skippedExisting = 0;
+
+    for (const destId of effectiveBulkTargets) {
+      let nameMap = new Map<string, string>();
+      if (destId === activeBookmaker) {
+        if (activeNewTeams.length) {
+          for (const nt of activeNewTeams) {
+            const donor = allTeams.find(team => team.hasVoiceClip && normalizeTeamName(team.name) === normalizeTeamName(nt.name));
+            if (donor && await window.footballPos.teamVoice.copy(donor.id, nt.id)) nt.hasVoiceClip = true;
+          }
+          workingTeams = [...workingTeams, ...activeNewTeams];
+          totalNewTeams += activeNewTeams.length;
+        }
+      } else {
+        const res = await ensureTeamsInChannel(workingTeams, sourcePool, destId);
+        workingTeams = res.nextTeams;
+        nameMap = res.nameMap;
+        totalNewTeams += res.created;
+      }
+
+      const destDayMatches = workingMatches.filter(m => m.date === activeDate && m.bookmaker === destId);
+      for (const row of bulkPreview.rows) {
+        const homeName = nameMap.get(normalizeTeamName(row.teams[0])) ?? row.teams[0];
+        const awayName = nameMap.get(normalizeTeamName(row.teams[1])) ?? row.teams[1];
+        const kickoff = kickoffIso(activeDate, row.time, row.nextDay);
+        const alreadyExists = destDayMatches.some(match =>
+          (match.kickoffAt === kickoff || (match.time === row.time && kickoffLocalDate(match.kickoffAt) === kickoffLocalDate(kickoff)))
+          && normalizeTeamName(match.home) === normalizeTeamName(homeName)
+          && normalizeTeamName(match.away) === normalizeTeamName(awayName)
+        );
+        if (alreadyExists) { skippedExisting += 1; continue; }
+        const created: Match = {
+          id: uid(),
+          date: activeDate,
+          bookmaker: destId,
+          time: row.time,
+          home: homeName,
+          away: awayName,
+          homeScore: null,
+          awayScore: null,
+          postponed: false,
+          kickoffAt: kickoff,
+          rules: [...(row.bd ? [ruleFromCode('body', row.bd)] : []), ...(row.ou ? [ruleFromCode('total', row.ou)] : [])],
+        };
+        workingMatches.push(created);
+        destDayMatches.push(created);
+        totalCreatedMatches += 1;
+      }
+    }
+
+    if (totalCreatedMatches === 0 && totalNewTeams === 0) {
+      return setBulkError('ရွေးထားသော Channel များတွင် ဤ Match များ အားလုံး ရှိပြီးသားဖြစ်သည်။');
+    }
+    await save({ ...store, teams: workingTeams, matches: workingMatches });
     setBulkPreview(null); setBulkJson(''); setBulkOpen(false); setBulkError('');
-    flash(`Match ${createdMatches.length} ပွဲ${newTeams.length ? ` · Team အသစ် ${newTeams.length} သင်း` : ''} ကို တစ်ခါတည်းထည့်ပြီးပါပြီ။`);
+    flash(`Channel ${effectiveBulkTargets.length} ခုသို့ Match ${totalCreatedMatches} ပွဲ${totalNewTeams ? ` · Team အသစ် ${totalNewTeams} သင်း` : ''}${skippedExisting ? ` (ရှိပြီးသား ${skippedExisting} ပွဲ ကျော်ခဲ့သည်)` : ''} ထည့်ပြီးပါပြီ။`);
+  };
+  const openCloneModal = () => {
+    setCloneTargets(otherChannels.map(channel => channel.id));
+    setCloneSyncTeams(true);
+    setCloneBackfillApi(true);
+    setCloneModalOpen(true);
+  };
+  const cloneMatchesToChannels = async () => {
+    if (!store || cloneBusy) return;
+    const targetIds = cloneTargets.filter(id => otherChannels.some(channel => channel.id === id));
+    if (!targetIds.length) return flash('ကူးထည့်မည့် Channel အနည်းဆုံး ၁ ခု ရွေးချယ်ပါ။');
+    if (!dayMatches.length) return flash(`${activeDate} အတွက် ကူးရန် Match မရှိပါ။`);
+    setCloneBusy(true);
+    try {
+      let workingTeams = [...allTeams];
+      let workingMatches = [...matches];
+      const referencedNames = new Set(dayMatches.flatMap(match => [normalizeTeamName(match.home), normalizeTeamName(match.away)]));
+      const sourceTeams = teams.filter(team => referencedNames.has(normalizeTeamName(team.name)));
+      const now = new Date().toISOString();
+      let createdMatchCount = 0; let updatedApiCount = 0; let createdTeamCount = 0; let copiedVoiceCount = 0;
+
+      for (const destId of targetIds) {
+        let nameMap = new Map<string, string>();
+        if (cloneSyncTeams && sourceTeams.length > 0) {
+          const teamResult = await ensureTeamsInChannel(workingTeams, sourceTeams, destId);
+          workingTeams = teamResult.nextTeams;
+          nameMap = teamResult.nameMap;
+          createdTeamCount += teamResult.created;
+          copiedVoiceCount += teamResult.copiedVoices;
+        }
+        const destDayMatches = workingMatches.filter(match => match.date === activeDate && match.bookmaker === destId);
+        const usedFixtureIds = new Set(destDayMatches.filter(match => match.apiFixtureId).map(match => match.apiFixtureId as number));
+
+        for (const source of dayMatches) {
+          const destHome = nameMap.get(normalizeTeamName(source.home)) ?? source.home;
+          const destAway = nameMap.get(normalizeTeamName(source.away)) ?? source.away;
+          const existing = destDayMatches.find(match =>
+            (match.apiFixtureId && source.apiFixtureId && match.apiFixtureId === source.apiFixtureId)
+            || ((match.kickoffAt === source.kickoffAt || match.time === source.time)
+              && normalizeTeamName(match.home) === normalizeTeamName(destHome)
+              && normalizeTeamName(match.away) === normalizeTeamName(destAway))
+          );
+
+          if (!existing) {
+            const activeRules = source.rules.filter(rule => rule.status !== 'closed');
+            const rulesToClone = (activeRules.length ? activeRules : source.rules.slice(-2)).map(rule => ({
+              ...structuredClone(rule),
+              id: uid(),
+              sourceId: undefined,
+              status: 'active' as const,
+              effectiveAt: now,
+              closedAt: undefined,
+            }));
+            const canUseApi = Boolean(source.apiFixtureId && !usedFixtureIds.has(source.apiFixtureId));
+            if (canUseApi && source.apiFixtureId) usedFixtureIds.add(source.apiFixtureId);
+            const clonedMatch: Match = {
+              id: uid(),
+              date: activeDate,
+              bookmaker: destId,
+              time: source.time,
+              home: destHome,
+              away: destAway,
+              homeScore: source.homeScore,
+              awayScore: source.awayScore,
+              postponed: source.postponed,
+              kickoffAt: source.kickoffAt,
+              rules: rulesToClone,
+              ...(canUseApi ? {
+                apiFixtureId: source.apiFixtureId,
+                apiHome: source.apiHome,
+                apiAway: source.apiAway,
+                apiSidesReversed: source.apiSidesReversed,
+                apiStatus: source.apiStatus,
+                apiLeague: source.apiLeague,
+                resultSource: source.resultSource,
+                resultCheckedAt: source.resultCheckedAt,
+              } : {}),
+            };
+            workingMatches.push(clonedMatch);
+            destDayMatches.push(clonedMatch);
+            createdMatchCount += 1;
+          } else if (cloneBackfillApi && !existing.apiFixtureId && source.apiFixtureId && !usedFixtureIds.has(source.apiFixtureId)) {
+            usedFixtureIds.add(source.apiFixtureId);
+            const shouldCopyResult = existing.homeScore === null && existing.awayScore === null && !existing.postponed && (source.postponed || (source.homeScore !== null && source.awayScore !== null));
+            const updated: Match = {
+              ...existing,
+              apiFixtureId: source.apiFixtureId,
+              apiHome: source.apiHome,
+              apiAway: source.apiAway,
+              apiSidesReversed: source.apiSidesReversed,
+              apiStatus: source.apiStatus,
+              apiLeague: source.apiLeague,
+              ...(shouldCopyResult ? {
+                homeScore: source.homeScore,
+                awayScore: source.awayScore,
+                postponed: source.postponed,
+                resultSource: source.resultSource,
+                resultCheckedAt: source.resultCheckedAt,
+              } : {}),
+            };
+            workingMatches = workingMatches.map(match => match.id === existing.id ? updated : match);
+            updatedApiCount += 1;
+          }
+        }
+      }
+
+      await save({ ...store, teams: workingTeams, matches: workingMatches });
+      setCloneModalOpen(false);
+      if (!createdMatchCount && !updatedApiCount && !createdTeamCount && !copiedVoiceCount) {
+        flash('ရွေးထားသော Channel များတွင် ယနေ့ Match နှင့် API Link များ တူညီပြီးသားဖြစ်သည်။');
+      } else {
+        flash(`Channel ${targetIds.length} ခုသို့ Match ${createdMatchCount} ပွဲ${updatedApiCount ? ` · API Link ${updatedApiCount} ခု` : ''}${createdTeamCount ? ` · Team ${createdTeamCount} သင်း` : ''}${copiedVoiceCount ? ` · Voice ${copiedVoiceCount} ခု` : ''} ကူးပြီးပါပြီ။`);
+      }
+    } catch (error) {
+      flash(error instanceof Error ? error.message : 'Match များကို မကူးနိုင်ပါ။');
+    } finally {
+      setCloneBusy(false);
+    }
   };
   const saveResult = async (m: Match, homeScore: string, awayScore: string, postponed: boolean) => { if (!store) return; if (!postponed && (homeScore === '' || awayScore === '')) return flash('Result နှစ်ဖက်လုံး ထည့်ပါ၊ သို့မဟုတ် P:P ကိုရွေးပါ။'); const updated = { ...m, homeScore: postponed ? null : Number(homeScore), awayScore: postponed ? null : Number(awayScore), postponed, resultSource: 'manual' as const }; await save({ ...store, matches: matches.map(x => x.id === m.id ? updated : x) }); flash(postponed ? 'P:P / Refund အဖြစ်သိမ်းပြီးပါပြီ။' : 'Result သိမ်းပြီး settlement ကို update လုပ်ပြီးပါပြီ။'); };
   const resetBetForm = () => { setEditingBetId(null); setInsertAfterBetId(null); setBetForm({ matchId: '', ruleId: '', selection: 'home', note: '', amount: '', lateReceivedAt: '', lateReason: '' }); };
@@ -1501,12 +1744,6 @@ export function App() {
     } catch (error) { flash(error instanceof Error ? error.message : 'Transfer file export မလုပ်နိုင်ပါ။'); }
     finally { setTransferBusy(false); }
   };
-  const uniqueImportCode = (requested: string, used: Set<string>) => {
-    const base = /^[a-z0-9]+$/.test(requested.trim().toLowerCase()) ? requested.trim().toLowerCase() : 'team';
-    let candidate = base; let suffix = 2;
-    while (used.has(candidate)) candidate = `${base}${suffix++}`;
-    used.add(candidate); return candidate;
-  };
   const shareTeamsToChannel = async () => {
     if (!store || teamShareBusy) return;
     const destination = channels.find(channel => channel.id === transferDestination && channel.enabled);
@@ -1515,36 +1752,7 @@ export function App() {
     if (!await askConfirm(`${activeChannel?.name ?? activeBookmaker} ရှိ Team ${teams.length} သင်းကို ${destination.name} သို့ share လုပ်မလား?\n\nရှိပြီးသား Team ကို မထပ်ထည့်ပါ။ API mapping၊ English voice name နှင့် ဖမ်းထားသော team voice ကိုပါ ကူးပေးမည်။`)) return;
     setTeamShareBusy(true);
     try {
-      let nextTeams = [...allTeams];
-      const destinationTeams = () => nextTeams.filter(team => team.bookmaker === destination.id);
-      const usedCodes = new Set(destinationTeams().map(team => team.code.toLowerCase()));
-      let created = 0; let updated = 0; let copiedVoices = 0;
-      for (const source of teams) {
-        let target = destinationTeams().find(team =>
-          (team.sourceId ?? team.id) === (source.sourceId ?? source.id)
-          || Boolean(source.apiTeamId && team.apiTeamId === source.apiTeamId)
-          || normalizeTeamName(team.name) === normalizeTeamName(source.name));
-        if (!target) {
-          const id = uid();
-          const voiceCopied = source.hasVoiceClip ? await window.footballPos.teamVoice.copy(source.id, id) : false;
-          target = {
-            ...structuredClone(source), id, sourceId: source.sourceId ?? source.id, bookmaker: destination.id,
-            code: uniqueImportCode(source.code, usedCodes), hasVoiceClip: voiceCopied,
-          };
-          nextTeams.push(target); created += 1; copiedVoices += voiceCopied ? 1 : 0;
-          continue;
-        }
-        let changed = false;
-        let nextTarget = target;
-        if (!nextTarget.sourceId) { nextTarget = { ...nextTarget, sourceId: source.sourceId ?? source.id }; changed = true; }
-        if (!nextTarget.apiTeamId && source.apiTeamId) { nextTarget = { ...nextTarget, apiTeamId: source.apiTeamId }; changed = true; }
-        if (!nextTarget.apiName && source.apiName) { nextTarget = { ...nextTarget, apiName: source.apiName }; changed = true; }
-        if (!nextTarget.voiceName && source.voiceName) { nextTarget = { ...nextTarget, voiceName: source.voiceName }; changed = true; }
-        if (!nextTarget.hasVoiceClip && source.hasVoiceClip && await window.footballPos.teamVoice.copy(source.id, nextTarget.id)) {
-          nextTarget = { ...nextTarget, hasVoiceClip: true }; changed = true; copiedVoices += 1;
-        }
-        if (changed) { nextTeams = nextTeams.map(team => team.id === nextTarget.id ? nextTarget : team); updated += 1; }
-      }
+      const { nextTeams, created, updated, copiedVoices } = await ensureTeamsInChannel(allTeams, teams, destination.id);
       await save({ ...store, teams: nextTeams });
       flash(`${destination.name} သို့ Team ${created} သင်းအသစ်ထည့်ပြီး ${updated} သင်း update လုပ်ပါပြီ · Voice ${copiedVoices} ခုကူးပြီးပါပြီ။`);
     } catch (error) { flash(error instanceof Error ? error.message : 'Team များကို share မလုပ်နိုင်ပါ။'); }
@@ -1783,7 +1991,7 @@ export function App() {
   }
   if (!store) return <main className="loading">Football Bet POS ဖွင့်နေသည်…</main>;
   return <main><header><div><p className="eyebrow">OFFLINE DESKTOP POS</p><h1>Football Bet POS</h1></div><div className="workspace-picker" style={{ display: 'flex', gap: '10px', alignItems: 'flex-end', flexWrap: 'wrap' }}><div className="day-picker"><label>ဒိုင် / Channel<select value={activeBookmaker} onChange={e => { setActiveBookmaker(e.target.value); resetBetForm(); resetMatchForm(); }}>{enabledChannels.map(channel => <option value={channel.id} key={channel.id}>{channel.name}</option>)}</select></label><small>Match နှင့် လောင်းကြေး သီးခြားထားသည်</small></div><div className="day-picker"><label>အလုပ်လုပ်မည့်ရက်<input type="date" value={activeDate} onChange={e => { setActiveDate(e.target.value); resetBetForm(); resetMatchForm(); }}/></label><small>ရက်ပြောင်းလျှင် စာရင်းများ မပေါင်းပါ</small></div></div><nav>{([['matches','Matches & Rules'],['ledger','လောင်းမှတ်တမ်း'],['report','Daily Report'],['analytics','Analytics'],['settings','Settings']] as const).map(([id, text]) => <button key={id} className={page === id ? 'active' : ''} onClick={() => setPage(id)}>{text}</button>)}</nav></header>{notice && <div className="notice">{notice}</div>}<div className="page-content">
-  {page === 'matches' && <section className="grid"><article className="card form-card"><h2>Match အသစ်နှင့် Rule သတ်မှတ်ရန်</h2><p className="muted">{activeDate} အတွက် match ထည့်နေသည်။ အသင်းများကို Settings → Team list မှာ အရင်သတ်မှတ်ပြီး short code ဖြင့် Quick Entry သုံးနိုင်သည်။</p>{teams.length === 0 && <div className="team-warning">Team list မရှိသေးပါ။ Settings မှာ အသင်းနှင့် short code အရင်ထည့်ပါ။</div>}<form onSubmit={addMatch}><div className="form-grid"><label>Time<input type="time" value={matchForm.time} onChange={e => setMatchForm({ ...matchForm, time: e.target.value })}/></label><TeamSelect label="ဘယ်အသင်း" value={matchForm.home} teams={teams} onChange={home => setMatchForm({ ...matchForm, home })}/><TeamSelect label="ညာအသင်း" value={matchForm.away} teams={teams} onChange={away => setMatchForm({ ...matchForm, away })}/></div>{matchForm.rules.map((rule, index) => <div className="rule-box" key={rule.id}><div className="rule-head"><b>{index + 1}. Flexible rule</b>{matchForm.rules.length > 1 && <button type="button" className="link danger" onClick={() => setMatchForm({ ...matchForm, rules: matchForm.rules.filter(x => x.id !== rule.id) })}>ဖျက်</button>}</div><RuleEditor rule={rule} home={matchForm.home} away={matchForm.away} onChange={next => setMatchForm({ ...matchForm, rules: matchForm.rules.map(x => x.id === rule.id ? next : x) })}/></div>)}<button type="button" className="secondary" onClick={() => setMatchForm({ ...matchForm, rules: [...matchForm.rules, defaultRule('body')] })}>+ Rule ထပ်ထည့်</button><button type="submit">Match သိမ်းမည်</button></form></article><article className="card scroll-list-card"><h2>{activeDate} Match များ</h2><div className="match-list-toolbar"><div className="match-list-search"><input value={matchListSearch} onChange={e => setMatchListSearch(e.target.value)} placeholder="🔍 Team name/code, time, league သို့ rule code ရှာရန်"/>{matchListSearch && <button type="button" className="link" onClick={() => setMatchListSearch('')}>ရှင်းမည်</button>}</div><span>{visibleMatchCards.length} / {dayMatches.length} ပွဲ</span></div><div className="card-scroll">{dayMatches.length === 0 ? <p className="muted">ဤရက်အတွက် Match မရှိသေးပါ။ ရက်ဟောင်း data မပေါင်းပါ။</p> : visibleMatchCards.length === 0 ? <p className="empty">“{matchListSearch}” နှင့်ကိုက်ညီသော Match မတွေ့ပါ။</p> : visibleMatchCards.map(m => <MatchCard key={m.id} match={m} onSave={saveResult}/>)}</div></article></section>}
+  {page === 'matches' && <section className="grid"><article className="card form-card"><h2>Match အသစ်နှင့် Rule သတ်မှတ်ရန်</h2><p className="muted">{activeDate} အတွက် match ထည့်နေသည်။ အသင်းများကို Settings → Team list မှာ အရင်သတ်မှတ်ပြီး short code ဖြင့် Quick Entry သုံးနိုင်သည်။</p>{teams.length === 0 && <div className="team-warning">Team list မရှိသေးပါ။ Settings မှာ အသင်းနှင့် short code အရင်ထည့်ပါ။</div>}<form onSubmit={addMatch}><div className="form-grid"><label>Time<input type="time" value={matchForm.time} onChange={e => setMatchForm({ ...matchForm, time: e.target.value })}/></label><TeamSelect label="ဘယ်အသင်း" value={matchForm.home} teams={teams} onChange={home => setMatchForm({ ...matchForm, home })}/><TeamSelect label="ညာအသင်း" value={matchForm.away} teams={teams} onChange={away => setMatchForm({ ...matchForm, away })}/></div>{matchForm.rules.map((rule, index) => <div className="rule-box" key={rule.id}><div className="rule-head"><b>{index + 1}. Flexible rule</b>{matchForm.rules.length > 1 && <button type="button" className="link danger" onClick={() => setMatchForm({ ...matchForm, rules: matchForm.rules.filter(x => x.id !== rule.id) })}>ဖျက်</button>}</div><RuleEditor rule={rule} home={matchForm.home} away={matchForm.away} onChange={next => setMatchForm({ ...matchForm, rules: matchForm.rules.map(x => x.id === rule.id ? next : x) })}/></div>)}<button type="button" className="secondary" onClick={() => setMatchForm({ ...matchForm, rules: [...matchForm.rules, defaultRule('body')] })}>+ Rule ထပ်ထည့်</button><button type="submit">Match သိမ်းမည်</button></form></article><article className="card scroll-list-card"><div className="match-list-head"><h2>{activeDate} Match များ</h2>{otherChannels.length > 0 && <button type="button" className="secondary compact-clone-btn" disabled={dayMatches.length === 0} onClick={openCloneModal}>📤 Channel များသို့ ကူးမည်</button>}</div><div className="match-list-toolbar"><div className="match-list-search"><input value={matchListSearch} onChange={e => setMatchListSearch(e.target.value)} placeholder="🔍 Team name/code, time, league သို့ rule code ရှာရန်"/>{matchListSearch && <button type="button" className="link" onClick={() => setMatchListSearch('')}>ရှင်းမည်</button>}</div><span>{visibleMatchCards.length} / {dayMatches.length} ပွဲ</span></div><div className="card-scroll">{dayMatches.length === 0 ? <p className="muted">ဤရက်အတွက် Match မရှိသေးပါ။ ရက်ဟောင်း data မပေါင်းပါ။</p> : visibleMatchCards.length === 0 ? <p className="empty">“{matchListSearch}” နှင့်ကိုက်ညီသော Match မတွေ့ပါ။</p> : visibleMatchCards.map(m => <MatchCard key={m.id} match={m} onSave={saveResult}/>)}</div></article></section>}
   {page === 'ledger' && (
     <section className="grid">
       <article className="card form-card">
@@ -2374,6 +2582,7 @@ export function App() {
       <p className="muted">JSON ၏ left team ကို Body base team အဖြစ်ယူသည်။ <code>nextDay: true</code> သည် accounting date နောက်တစ်နေ့ kickoff ဖြစ်သော်လည်း report ကို {activeDate} ထဲမှာပဲထားမည်။</p>
       <button type="button" className="secondary" onClick={() => { setBulkOpen(open => !open); setBulkError(''); }}>{bulkOpen ? 'JSON Import ပိတ်မည်' : '⚡ JSON Import ဖွင့်မည်'}</button>
       <button type="button" disabled={bulkApiBusy || dayMatches.length === 0} onClick={() => void bulkLinkApiMatches()}>{bulkApiBusy ? 'API fixtures ရှာနေသည်…' : `API မချိတ်ရသေးသော Match အားလုံးချိတ်မည်`}</button>
+      {otherChannels.length > 0 && <button type="button" className="secondary" disabled={dayMatches.length === 0} onClick={openCloneModal}>📤 ယနေ့ Match များ Channel များသို့ ကူးမည်</button>}
       <p className="muted">တူညီသော accounting date ရှိ အခြား channel တွင် ချိတ်ပြီးသား match ကို အရင် reference ယူမည်။ မတွေ့မှသာ actual kickoff date အလိုက် API request သုံးပြီး၊ မသိသေးသောပွဲများကို တစ်ပွဲစီရွေးခိုင်းမည်။</p>
       {bulkOpen && <div className="bulk-import-box">
         <textarea value={bulkJson} onChange={e => { setBulkJson(e.target.value); setBulkPreview(null); setBulkError(''); }} spellCheck={false} placeholder={'[\n  {\n    "nextDay": true,\n    "time": "01:45",\n    "teams": ["လိုင်ယွန်", "ပဲလေ့စ်"],\n    "bd": "D",\n    "ou": "3D"\n  }\n]'}/>
@@ -2404,6 +2613,41 @@ export function App() {
             })}
           </div>}
           <div className="bulk-match-preview">{bulkPreview.rows.map((row, index) => <div key={`${row.time}-${index}`}><span>{row.nextDay ? nextDate(activeDate) : activeDate} · {row.time}</span><b>{row.teams[0]} <em>vs</em> {row.teams[1]}</b><small>{row.bd ? `BD ${row.bd}` : ''}{row.bd && row.ou ? ' · ' : ''}{row.ou ? `O/U ${row.ou}` : ''}</small></div>)}</div>
+          <div className="viber-channel-selector" style={{ marginTop: '12px' }}>
+            <div className="analytics-filter-head" style={{ marginBottom: '6px' }}>
+              <span className="viber-channel-selector-title" style={{ margin: 0 }}>
+                ထည့်သွင်းမည့် Channel များ ({effectiveBulkTargets.length}/{enabledChannels.length})
+              </span>
+              <div style={{ display: 'flex', gap: '10px' }}>
+                <button type="button" className="link" onClick={() => { setBulkTargetChannels([activeBookmaker]); setBulkError(''); }}>လက်ရှိ Channel တစ်ခုတည်း</button>
+                <button type="button" className="link" onClick={() => { setBulkTargetChannels(enabledChannels.map(channel => channel.id)); setBulkError(''); }}>Channel အားလုံးရွေးမည်</button>
+              </div>
+            </div>
+            <div className="viber-channel-chips">
+              {enabledChannels.map(channel => {
+                const checked = effectiveBulkTargets.includes(channel.id);
+                return (
+                  <label key={channel.id} className={`viber-channel-chip ${checked ? 'active' : ''}`}>
+                    <input
+                      type="checkbox"
+                      checked={checked}
+                      onChange={e => {
+                        const next = e.target.checked
+                          ? [...new Set([...effectiveBulkTargets, channel.id])]
+                          : effectiveBulkTargets.filter(id => id !== channel.id);
+                        setBulkTargetChannels(next);
+                        setBulkError('');
+                      }}
+                    />
+                    <span>{channel.name}</span>
+                  </label>
+                );
+              })}
+            </div>
+            <small className="viber-channel-hint">
+              ရွေးထားသော Channel အားလုံးထဲသို့ Match နှင့် Team အသစ်များ တစ်ခါတည်း ထည့်ပေးမည်။ (ရှိပြီးသား Match/Team များကို မထပ်ပါ)
+            </small>
+          </div>
           <button type="button" onClick={() => void saveBulkMatches()}>အားလုံးသိမ်းမည်</button>
         </div>}
       </div>}
@@ -2441,7 +2685,42 @@ export function App() {
       </div>)}</div>}
     </article>}
   </section>}
-  </div>{confirmation && <div className="confirm-overlay" role="dialog" aria-modal="true"><div className="confirm-modal"><h3>အတည်ပြုပါ</h3><p>{confirmation.message}</p><div><button type="button" className="secondary" onClick={() => closeConfirm(false)}>မလုပ်တော့ပါ</button><button type="button" autoFocus onClick={() => closeConfirm(true)}>အတည်ပြုမည်</button></div></div></div>}</main>;
+  </div>{cloneModalOpen && <div className="confirm-overlay" role="dialog" aria-modal="true"><div className="confirm-modal clone-modal">
+    <h3>Match များကို အခြား Channel များသို့ ကူးမည်</h3>
+    <p>မူရင်း: <b>{activeChannel?.name ?? activeBookmaker}</b> ({activeDate}) · Match <b>{dayMatches.length}</b> ပွဲ (API ချိတ်ပြီး <b>{dayMatches.filter(m => m.apiFixtureId).length}</b> ပွဲ)</p>
+    <div className="viber-channel-selector" style={{ margin: '10px 0' }}>
+      <div className="analytics-filter-head" style={{ marginBottom: '8px' }}>
+        <span className="viber-channel-selector-title" style={{ margin: 0 }}>ကူးထည့်မည့် Channel များ ({cloneTargets.length}/{otherChannels.length})</span>
+        <div style={{ display: 'flex', gap: '10px' }}>
+          <button type="button" className="link" onClick={() => setCloneTargets(otherChannels.map(channel => channel.id))}>အားလုံးရွေး</button>
+          <button type="button" className="link" onClick={() => setCloneTargets([])}>ရှင်းမည်</button>
+        </div>
+      </div>
+      <div className="viber-channel-chips">
+        {otherChannels.map(channel => {
+          const checked = cloneTargets.includes(channel.id);
+          const existingCount = matches.filter(m => m.date === activeDate && m.bookmaker === channel.id).length;
+          return (
+            <label key={channel.id} className={`viber-channel-chip ${checked ? 'active' : ''}`}>
+              <input
+                type="checkbox"
+                checked={checked}
+                onChange={e => setCloneTargets(current => e.target.checked ? [...new Set([...current, channel.id])] : current.filter(id => id !== channel.id))}
+              />
+              <span>{channel.name} <small style={{ opacity: 0.7 }}>({existingCount} ပွဲ)</small></span>
+            </label>
+          );
+        })}
+      </div>
+    </div>
+    <div className="clone-options">
+      <label className="check"><input type="checkbox" checked={cloneSyncTeams} onChange={e => setCloneSyncTeams(e.target.checked)}/> မရှိသေးသော Team + Short Code + Voice များကိုပါ ကူးမည်</label>
+      <label className="check"><input type="checkbox" checked={cloneBackfillApi} onChange={e => setCloneBackfillApi(e.target.checked)}/> ရှိပြီးသား Match များတွင် API Link မရှိသေးပါက မူရင်းမှ ဖြည့်ပေးမည်</label>
+    </div>
+    <small className="viber-channel-hint" style={{ marginBottom: '12px' }}>လောင်းမှတ်တမ်း (Bets) များကို မကူးပါ။ ရှိပြီးသား Match နှင့် Rule များကိုလည်း မဖျက်ပါ။</small>
+    <div><button type="button" className="secondary" disabled={cloneBusy} onClick={() => setCloneModalOpen(false)}>မလုပ်တော့ပါ</button><button type="button" disabled={cloneBusy || cloneTargets.length === 0} onClick={() => void cloneMatchesToChannels()}>{cloneBusy ? 'ကူးနေသည်…' : `Channel ${cloneTargets.length} ခုသို့ ကူးမည်`}</button></div>
+  </div></div>}
+  {confirmation && <div className="confirm-overlay" role="dialog" aria-modal="true"><div className="confirm-modal"><h3>အတည်ပြုပါ</h3><p>{confirmation.message}</p><div><button type="button" className="secondary" onClick={() => closeConfirm(false)}>မလုပ်တော့ပါ</button><button type="button" autoFocus onClick={() => closeConfirm(true)}>အတည်ပြုမည်</button></div></div></div>}</main>;
 }
 function MatchCard({ match, onSave }: { match: Match; onSave: (m: Match, h: string, a: string, p: boolean) => void }) {
   const [h, setH] = useState(match.homeScore?.toString() ?? '');

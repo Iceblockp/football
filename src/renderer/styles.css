@@ -228,5 +228,15 @@ main>.card{min-height:0;overflow:auto}
 :root[data-theme="dark"] .analytics-selected-row td{background:#203226}
 @media(max-width:1100px){.analytics-filters{grid-template-columns:1fr}.analytics-kpi-grid{grid-template-columns:repeat(2,minmax(0,1fr))}}
 @media(max-width:650px){.analytics-kpi-grid{grid-template-columns:1fr}}
+.match-list-head{display:flex;align-items:center;justify-content:space-between;gap:10px;padding-bottom:10px;border-bottom:1px solid #e3ebdf;flex:0 0 auto}
+.match-list-head h2{margin:0}
+.compact-clone-btn{margin:0;padding:6px 10px;font-size:12px;white-space:nowrap}
+.scroll-list-card>.match-list-toolbar{padding-top:10px}
+.clone-modal{width:min(560px,100%)}
+.clone-modal>.viber-channel-selector{display:block}
+.clone-modal>.clone-options{display:flex;flex-direction:column;justify-content:flex-start;gap:8px;margin:8px 0}
+.clone-options .check{margin-left:0;font-size:12px}
+:root[data-theme="dark"] .match-list-head{border-color:#33453a}
+
 
 
